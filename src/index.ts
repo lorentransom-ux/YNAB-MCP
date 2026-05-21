@@ -9,13 +9,35 @@ const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const app = express();
 app.use(express.json());
 
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
+if (!MCP_AUTH_TOKEN) {
+  console.warn('[YNAB-MCP] WARNING: MCP_AUTH_TOKEN is not set — the /mcp endpoint is unprotected');
+}
+
+function requireAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  if (!MCP_AUTH_TOKEN) {
+    next();
+    return;
+  }
+  const authHeader = req.headers['authorization'];
+  if (authHeader === `Bearer ${MCP_AUTH_TOKEN}`) {
+    next();
+    return;
+  }
+  res.status(401).json({ error: 'Unauthorized' });
+}
+
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', sessions: transports.size });
 });
 
-app.post('/mcp', async (req, res) => {
+app.post('/mcp', requireAuth, async (req, res) => {
   try {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -64,7 +86,7 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-app.get('/mcp', async (req, res) => {
+app.get('/mcp', requireAuth, async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports.has(sessionId)) {
     res.status(400).send('Invalid or missing session ID');
@@ -73,7 +95,7 @@ app.get('/mcp', async (req, res) => {
   await transports.get(sessionId)!.handleRequest(req, res);
 });
 
-app.delete('/mcp', async (req, res) => {
+app.delete('/mcp', requireAuth, async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports.has(sessionId)) {
     res.status(400).send('Invalid or missing session ID');
@@ -86,6 +108,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[YNAB-MCP] Server listening on port ${PORT}`);
   if (!process.env.YNAB_TOKEN) {
     console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN environment variable is not set');
+  }
+  if (!MCP_AUTH_TOKEN) {
+    console.warn('[YNAB-MCP] WARNING: MCP_AUTH_TOKEN is not set — set it to protect your budget data');
   }
 });
 
