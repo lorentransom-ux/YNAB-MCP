@@ -23,27 +23,45 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ---
 
-## Setup
+## Setup and Deployment
 
-### 1. Generate a YNAB Personal Access Token
+### Step 1 — Generate a YNAB Personal Access Token
 
 1. Log in to YNAB and go to **app.ynab.com/settings/developer**
 2. Click **New Token** under Personal Access Tokens
 3. Copy the token — you won't see it again
 
-### 2. Set the Environment Variable
+### Step 2 — Generate a connector secret
 
-The server reads a single environment variable:
+The server protects the `/mcp` endpoint with a Bearer token. Anyone calling your deployed URL without this token gets a `401 Unauthorized` response.
 
-```
-YNAB_TOKEN=your_token_here
-```
-
-For local development, create a `.env` file (it's gitignored) or export it in your shell:
+Generate a strong random secret by running this in Terminal on your Mac:
 
 ```bash
-export YNAB_TOKEN=your_token_here
+openssl rand -hex 32
 ```
+
+Copy the output — you'll use it in the next two steps.
+
+### Step 3 — Deploy to Railway
+
+1. Go to **railway.app** → **New Project** → **Deploy from GitHub repo** → select this repo
+2. The `main` branch will be selected by default — leave it as is
+3. Open your service → **Variables** tab and add these two variables:
+   - `YNAB_TOKEN` — your YNAB personal access token from Step 1
+   - `MCP_AUTH_TOKEN` — the random secret you generated in Step 2
+4. Railway builds and deploys automatically using `railway.toml`
+5. Go to your service → **Settings** → **Generate Domain** to get your public URL (e.g. `https://your-app.railway.app`)
+
+### Step 4 — Connect to Claude.ai
+
+1. Open Claude.ai → **Settings → Connectors → Add custom connector**
+2. Enter your Railway URL with the `/mcp` path:
+   ```
+   https://your-app.railway.app/mcp
+   ```
+3. Under **Authentication**, choose **Bearer token** and paste the same secret from Step 2
+4. Save — Claude can now access your YNAB data
 
 ---
 
@@ -51,38 +69,22 @@ export YNAB_TOKEN=your_token_here
 
 ```bash
 npm install
+```
+
+Create a `.env` file in the project root (it's gitignored):
+
+```
+YNAB_TOKEN=your_ynab_token_here
+MCP_AUTH_TOKEN=any_value_for_local_testing
+```
+
+Then run:
+
+```bash
 npm run dev
 ```
 
-The server starts on port 3000 by default. Check health at `http://localhost:3000/health`.
-
----
-
-## Deploy to Railway
-
-1. Go to **railway.app** → **New Project** → **Deploy from GitHub repo** → select this repo
-2. Set the branch to `claude/ynab-mcp-server-jPImi` (or merge to main first)
-3. Open your service → **Variables** tab and add two variables:
-   - `YNAB_TOKEN` = your YNAB personal access token
-   - `MCP_AUTH_TOKEN` = a strong random secret you generate (e.g. run `openssl rand -hex 32` in your terminal)
-4. Railway builds automatically using `railway.toml`
-5. Go to **Settings** → **Generate Domain** to get your public URL
-
----
-
-## Connect to Claude.ai
-
-The server requires an `Authorization: Bearer <token>` header on every request. Claude.ai custom connectors support this natively.
-
-1. Open Claude.ai → **Settings → Connectors → Add custom connector**
-2. Enter your Railway URL:
-   ```
-   https://your-app.railway.app/mcp
-   ```
-3. Under **Authentication**, choose **Bearer token** and paste your `MCP_AUTH_TOKEN` value
-4. Save — Claude can now access your YNAB data
-
-Anyone who requests your URL without the correct token gets a `401 Unauthorized` response.
+The server starts on port 3000. Check it's running at `http://localhost:3000/health`.
 
 ---
 
