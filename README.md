@@ -31,37 +31,28 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 2. Click **New Token** under Personal Access Tokens
 3. Copy the token — you won't see it again
 
-### Step 2 — Generate a connector secret
-
-The server protects the `/mcp` endpoint with a Bearer token. Anyone calling your deployed URL without this token gets a `401 Unauthorized` response.
-
-Generate a strong random secret by running this in Terminal on your Mac:
-
-```bash
-openssl rand -hex 32
-```
-
-Copy the output — you'll use it in the next two steps.
-
-### Step 3 — Deploy to Railway
+### Step 2 — Deploy to Railway
 
 1. Go to **railway.app** → **New Project** → **Deploy from GitHub repo** → select this repo
 2. The `main` branch will be selected by default — leave it as is
-3. Open your service → **Variables** tab and add these two variables:
+3. Open your service → **Variables** tab and add:
    - `YNAB_TOKEN` — your YNAB personal access token from Step 1
-   - `MCP_AUTH_TOKEN` — the random secret you generated in Step 2
+   - `SERVER_URL` — your Railway public URL (e.g. `https://your-app.railway.app`). You may need to generate the domain first (Settings → Generate Domain), then come back and add this variable.
 4. Railway builds and deploys automatically using `railway.toml`
-5. Go to your service → **Settings** → **Generate Domain** to get your public URL (e.g. `https://your-app.railway.app`)
 
-### Step 4 — Connect to Claude.ai
+### Step 3 — Connect to Claude.ai
 
 1. Open Claude.ai → **Settings → Connectors → Add custom connector**
 2. Enter your Railway URL with the `/mcp` path:
    ```
    https://your-app.railway.app/mcp
    ```
-3. Under **Authentication**, choose **Bearer token** and paste the same secret from Step 2
-4. Save — Claude can now access your YNAB data
+3. Leave the **OAuth Client ID** and **OAuth Client Secret** fields empty — the server handles registration automatically
+4. Click **Add**
+
+Claude.ai will open a page on your Railway server asking **"Authorize YNAB access?"** — click **Approve**. This happens once. After that, Claude.ai holds a token and reconnects silently.
+
+> **Note:** If the server restarts (e.g. after a Railway redeploy), Claude.ai will prompt you to approve again. This is normal — tokens are held in memory.
 
 ---
 
@@ -75,7 +66,7 @@ Create a `.env` file in the project root (it's gitignored):
 
 ```
 YNAB_TOKEN=your_ynab_token_here
-MCP_AUTH_TOKEN=any_value_for_local_testing
+SERVER_URL=http://localhost:3000
 ```
 
 Then run:
@@ -91,7 +82,7 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 ## Architecture
 
 - **Transport**: Streamable HTTP (MCP spec) with stateful sessions
-- **Auth**: Bearer token via `YNAB_TOKEN` env var
+- **Auth**: OAuth 2.0 with dynamic client registration and PKCE. Claude.ai registers itself automatically; you approve access once in your browser.
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
 
@@ -101,4 +92,6 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 
 - Your YNAB Personal Access Token is only read from the environment — never committed to code
 - All tools are read-only; no write operations are exposed
+- Access requires explicit approval in your browser — unapproved requests are rejected
+- PKCE prevents authorization codes from being stolen or replayed
 - Sessions are isolated per Claude connection

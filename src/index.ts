@@ -2,42 +2,51 @@ import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createMcpServer } from './server.js';
+import { oauthProvider, handleApproval } from './oauth.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
+const SERVER_URL = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
-const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
-if (!MCP_AUTH_TOKEN) {
-  console.warn('[YNAB-MCP] WARNING: MCP_AUTH_TOKEN is not set — the /mcp endpoint is unprotected');
-}
+// OAuth 2.0 endpoints (/.well-known/oauth-authorization-server, /authorize, /token, /register)
+app.use(
+  mcpAuthRouter({
+    provider: oauthProvider,
+    issuerUrl: new URL(SERVER_URL),
+    resourceName: 'YNAB MCP Server',
+  })
+);
 
-function requireAuth(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-): void {
-  if (!MCP_AUTH_TOKEN) {
-    next();
+// Approval page form handler
+app.post('/oauth/approve', (req, res) => {
+  const { nonce, action } = req.body as { nonce?: string; action?: string };
+  if (!nonce || (action !== 'approve' && action !== 'deny')) {
+    res.status(400).send('Invalid request');
     return;
   }
-  const authHeader = req.headers['authorization'];
-  if (authHeader === `Bearer ${MCP_AUTH_TOKEN}`) {
-    next();
+  const redirectUrl = handleApproval(nonce, action);
+  if (!redirectUrl) {
+    res.status(400).send('Authorization request expired or not found. Please try connecting again.');
     return;
   }
-  res.status(401).json({ error: 'Unauthorized' });
-}
+  res.redirect(redirectUrl);
+});
+
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+const bearerAuth = requireBearerAuth({ verifier: oauthProvider });
 
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', sessions: transports.size });
-});
-
-app.post('/mcp', requireAuth, async (req, res) => {
+app.post('/mcp', bearerAuth, async (req, res) => {
   try {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
 
@@ -86,7 +95,7 @@ app.post('/mcp', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/mcp', requireAuth, async (req, res) => {
+app.get('/mcp', bearerAuth, async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports.has(sessionId)) {
     res.status(400).send('Invalid or missing session ID');
@@ -95,7 +104,7 @@ app.get('/mcp', requireAuth, async (req, res) => {
   await transports.get(sessionId)!.handleRequest(req, res);
 });
 
-app.delete('/mcp', requireAuth, async (req, res) => {
+app.delete('/mcp', bearerAuth, async (req, res) => {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   if (!sessionId || !transports.has(sessionId)) {
     res.status(400).send('Invalid or missing session ID');
@@ -106,22 +115,16 @@ app.delete('/mcp', requireAuth, async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[YNAB-MCP] Server listening on port ${PORT}`);
+  console.log(`[YNAB-MCP] Server URL: ${SERVER_URL}`);
   if (!process.env.YNAB_TOKEN) {
-    console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN environment variable is not set');
-  }
-  if (!MCP_AUTH_TOKEN) {
-    console.warn('[YNAB-MCP] WARNING: MCP_AUTH_TOKEN is not set — set it to protect your budget data');
+    console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN is not set');
   }
 });
 
 process.on('SIGTERM', async () => {
   console.log('[YNAB-MCP] SIGTERM received, shutting down...');
   for (const [sid, transport] of transports) {
-    try {
-      await transport.close();
-    } catch {
-      // ignore close errors during shutdown
-    }
+    try { await transport.close(); } catch { /* ignore */ }
     transports.delete(sid);
   }
   process.exit(0);
