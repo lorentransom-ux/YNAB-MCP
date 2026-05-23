@@ -4,7 +4,9 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-12 read-only tools covering every major YNAB reporting use case:
+12 read-only budget tools plus 2 tools for managing SMS notifications — all accessible via Claude chat.
+
+**Budget tools:**
 
 | Tool | Description |
 |------|-------------|
@@ -20,6 +22,13 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_movements` | Account-to-account transfers |
+
+**SMS config tools** (chat with Claude to update — no dashboard needed):
+
+| Tool | Description |
+|------|-------------|
+| `ynab_get_sms_config` | Show current notification config for all users |
+| `ynab_update_sms_config` | Update categories, schedule, timezone, or message format for a user |
 
 Plus optional scheduled SMS notifications — each person gets their own schedule and category list, delivered as standard SMS to their existing phone.
 
@@ -122,6 +131,54 @@ Times are interpreted in the user's `TIMEZONE`. Use any [IANA timezone name](htt
 ### Category Names
 
 `USER_CATEGORIES` is a comma-separated list of YNAB category names, spelled exactly as they appear in your budget (case-insensitive). Each user gets their own list — the balance shown is the remaining balance for the current month.
+
+---
+
+## Adjusting SMS Config via Claude Chat
+
+Once the server is running and connected to Claude.ai, you can update your SMS settings conversationally — no Railway dashboard needed for day-to-day changes.
+
+**Example conversations:**
+
+```
+You: Show me my current SMS config
+Claude: [calls ynab_get_sms_config]
+
+You: Add "Rent" and "Utilities" to my text
+Claude: [calls ynab_update_sms_config → updates Loren's category list]
+
+You: Move my wife's text to Wednesday mornings at 9
+Claude: [calls ynab_update_sms_config with schedule="0 9 * * 3"]
+       Note: schedule changes take effect after the next server restart.
+
+You: Show both of us the budgeted amount instead of remaining balance
+Claude: [calls ynab_update_sms_config twice, once per user, with format_field="budgeted"]
+
+You: Add a header note to my text that says "Weekly check-in"
+Claude: [calls ynab_update_sms_config with header_note="Weekly check-in"]
+```
+
+**What's adjustable per user:**
+- `categories` — which YNAB categories appear (full replacement list)
+- `schedule` — when texts fire (cron expression; restart required to take effect)
+- `timezone` — IANA timezone for schedule and month label
+- `format_field` — which dollar amount to show: `balance` (remaining), `budgeted`, or `activity` (spent)
+- `show_goal_progress` — append `(X% funded)` for categories with goals
+- `header_note` — custom line prepended to the message
+
+**What stays in Railway env vars** (phone numbers and Twilio credentials are not updatable via chat):
+- `USER1_PHONE`, `USER2_PHONE`
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_PHONE`
+
+### Config persistence — Railway Volume
+
+Config changes made via Claude are saved to `data/sms-config.json`. On Railway, this file lives on the service's ephemeral filesystem and **resets on redeploy** unless you attach a persistent volume:
+
+1. Railway dashboard → your service → **Volumes** tab → **Add Volume**
+2. Mount path: `/data`
+3. Add env var: `SMS_CONFIG_PATH=/data/sms-config.json`
+
+Without a volume, the config is re-seeded from your `USER1_*`/`USER2_*` env vars on each restart — which is fine, but any changes made via Claude will be lost on the next deploy.
 
 ---
 
