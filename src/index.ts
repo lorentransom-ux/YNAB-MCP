@@ -6,6 +6,8 @@ import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createMcpServer } from './server.js';
 import { oauthProvider, handleApproval } from './oauth.js';
+import { initScheduler } from './scheduler.js';
+import { seedConfigFromEnv } from './config.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const SERVER_URL = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
@@ -119,6 +121,8 @@ app.listen(PORT, '0.0.0.0', () => {
   if (!process.env.YNAB_TOKEN) {
     console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN is not set');
   }
+  seedConfigFromEnv();
+  initScheduler();
 });
 
 process.on('SIGTERM', async () => {
