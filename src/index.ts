@@ -8,6 +8,7 @@ import { createMcpServer } from './server.js';
 import { oauthProvider, handleApproval } from './oauth.js';
 import { initScheduler } from './scheduler.js';
 import { seedConfigFromEnv } from './config.js';
+import { handleInboundSms } from './sms-chat.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const SERVER_URL = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
@@ -43,6 +44,8 @@ app.post('/oauth/approve', (req, res) => {
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
+
+app.post('/sms', handleInboundSms);
 
 const bearerAuth = requireBearerAuth({ verifier: oauthProvider });
 

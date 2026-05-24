@@ -134,6 +134,43 @@ Times are interpreted in the user's `TIMEZONE`. Use any [IANA timezone name](htt
 
 ---
 
+## SMS Chat — Ask Budget Questions by Text
+
+Text your Twilio number a plain-English question and get a direct answer back. No app, no login — just SMS.
+
+**Examples:**
+```
+You: How much is left in groceries?
+YNAB: Groceries: $87.43 left this month.
+
+You: How much did we spend eating out this week?
+YNAB: Dining Out activity last 14 days: $124.50 across 6 transactions.
+
+You: Are we over budget anywhere?
+YNAB: Yes — Clothing is -$23.10 and Entertainment is -$8.00.
+```
+
+Replies are kept under 280 characters. Each text is a fresh query — no conversation history is retained between messages.
+
+### Setup
+
+1. Add `ANTHROPIC_API_KEY` to your Railway service's **Variables** tab (get one at console.anthropic.com)
+2. In the **Twilio Console** → Phone Numbers → your number → **Messaging** tab:
+   - Set **"A message comes in"** webhook to: `https://your-app.railway.app/sms`
+   - Method: `HTTP POST`
+
+Only phone numbers listed in `USER1_PHONE` / `USER2_PHONE` will receive replies — texts from other numbers are silently ignored.
+
+### Local testing with ngrok
+
+```bash
+ngrok http 3000
+# Copy the https URL, set it as the Twilio webhook temporarily
+# Then text your Twilio number and watch the logs
+```
+
+---
+
 ## Adjusting SMS Config via Claude Chat
 
 Once the server is running and connected to Claude.ai, you can update your SMS settings conversationally — no Railway dashboard needed for day-to-day changes.

@@ -108,6 +108,17 @@ export function registerSmsConfigTools(server: McpServer): void {
         };
       }
 
+      if (args.timezone !== undefined) {
+        try {
+          Intl.DateTimeFormat(undefined, { timeZone: args.timezone });
+        } catch {
+          return {
+            content: [{ type: 'text' as const, text: `Invalid timezone: "${args.timezone}". Use an IANA name like "America/Chicago".` }],
+            isError: true as const,
+          };
+        }
+      }
+
       const user = config.users[userIndex];
       const changes: string[] = [];
 
@@ -142,7 +153,6 @@ export function registerSmsConfigTools(server: McpServer): void {
         };
       }
 
-      config.users[userIndex] = user;
       saveConfig(config);
 
       return {
