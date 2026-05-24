@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import cron from 'node-cron';
 import { loadConfig, saveConfig } from '../config.js';
+import { refreshUserSchedule } from '../scheduler.js';
 
 function redactPhone(phone: string): string {
   return phone.length >= 4 ? `***-***-${phone.slice(-4)}` : '***';
@@ -47,7 +48,7 @@ export function registerSmsConfigTools(server: McpServer): void {
       description:
         'Updates the SMS notification config for one user. Specify the user by name and include ' +
         'only the fields you want to change. Categories is a full replacement list. ' +
-        'Schedule changes take effect after the next server restart.',
+        'All changes including schedule updates take effect immediately.',
       inputSchema: {
         user: z.string().describe('Name of the user to update (case-insensitive)'),
         categories: z
@@ -57,7 +58,7 @@ export function registerSmsConfigTools(server: McpServer): void {
         schedule: z
           .string()
           .optional()
-          .describe('Cron expression for when to send (e.g. "0 8 * * 1" = Monday 8am). Takes effect after server restart.'),
+          .describe('Cron expression for when to send (e.g. "0 8 * * 1" = Monday 8am). Takes effect immediately.'),
         timezone: z
           .string()
           .optional()
@@ -127,7 +128,7 @@ export function registerSmsConfigTools(server: McpServer): void {
         user.categories = args.categories;
       }
       if (args.schedule !== undefined) {
-        changes.push(`schedule: "${args.schedule}" (takes effect after restart)`);
+        changes.push(`schedule: "${args.schedule}"`);
         user.schedule = args.schedule;
       }
       if (args.timezone !== undefined) {
@@ -154,6 +155,10 @@ export function registerSmsConfigTools(server: McpServer): void {
       }
 
       saveConfig(config);
+
+      if (args.schedule !== undefined) {
+        refreshUserSchedule(user.name);
+      }
 
       return {
         content: [
