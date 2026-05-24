@@ -186,7 +186,6 @@ Claude: [calls ynab_update_sms_config → updates Loren's category list]
 
 You: Move my wife's text to Wednesday mornings at 9
 Claude: [calls ynab_update_sms_config with schedule="0 9 * * 3"]
-       Note: schedule changes take effect after the next server restart.
 
 You: Show both of us the budgeted amount instead of remaining balance
 Claude: [calls ynab_update_sms_config twice, once per user, with format_field="budgeted"]
@@ -197,7 +196,7 @@ Claude: [calls ynab_update_sms_config with header_note="Weekly check-in"]
 
 **What's adjustable per user:**
 - `categories` — which YNAB categories appear (full replacement list)
-- `schedule` — when texts fire (cron expression; restart required to take effect)
+- `schedule` — when texts fire (cron expression; takes effect immediately)
 - `timezone` — IANA timezone for schedule and month label
 - `format_field` — which dollar amount to show: `balance` (remaining), `budgeted`, or `activity` (spent)
 - `show_goal_progress` — append `(X% funded)` for categories with goals

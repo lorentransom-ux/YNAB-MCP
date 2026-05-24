@@ -1,8 +1,11 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient } from './ynab.js';
 import { toUSD } from './utils.js';
 import { isSmsConfigured, sendSms } from './sms.js';
 import { loadConfig, type UserConfig } from './config.js';
+
+// Tracks active cron tasks by user name so they can be stopped and replaced
+const activeTasks = new Map<string, ScheduledTask>();
 
 async function buildMessage(user: UserConfig): Promise<string> {
   const api = getYnabClient();
@@ -47,7 +50,6 @@ async function buildMessage(user: UserConfig): Promise<string> {
 async function runForUser(name: string, phone: string): Promise<void> {
   console.log(`[Scheduler] Firing for ${name}`);
   try {
-    // Re-read config on each trigger so category/format changes take effect immediately
     const config = loadConfig();
     const user = config.users.find((u) => u.name === name);
     if (!user) {
@@ -59,6 +61,34 @@ async function runForUser(name: string, phone: string): Promise<void> {
   } catch (err) {
     console.error(`[Scheduler] Error for ${name}:`, err);
   }
+}
+
+function registerTask(user: UserConfig): void {
+  const { name, phone, schedule, timezone } = user;
+  const task = cron.schedule(schedule, () => { void runForUser(name, phone); }, { timezone });
+  activeTasks.set(name, task);
+  console.log(`[Scheduler] Registered: ${name} | schedule="${schedule}" | tz=${timezone} | categories=[${user.categories.join(', ')}]`);
+}
+
+export function refreshUserSchedule(userName: string): void {
+  const existing = activeTasks.get(userName);
+  if (existing) {
+    existing.stop();
+    activeTasks.delete(userName);
+  }
+
+  if (!isSmsConfigured()) return;
+
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name === userName);
+  if (!user) return;
+
+  if (!cron.validate(user.schedule)) {
+    console.warn(`[Scheduler] Invalid schedule for ${user.name}: "${user.schedule}" — not registering`);
+    return;
+  }
+
+  registerTask(user);
 }
 
 export function initScheduler(): void {
@@ -79,9 +109,6 @@ export function initScheduler(): void {
       console.warn(`[Scheduler] Invalid schedule for ${user.name}: "${user.schedule}" — skipping`);
       continue;
     }
-    // Capture name and phone at registration time; other fields are re-read on each trigger
-    const { name, phone, schedule, timezone } = user;
-    cron.schedule(schedule, () => { void runForUser(name, phone); }, { timezone });
-    console.log(`[Scheduler] Registered: ${name} | schedule="${schedule}" | tz=${timezone} | categories=[${user.categories.join(', ')}]`);
+    registerTask(user);
   }
 }
