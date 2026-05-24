@@ -125,12 +125,20 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
     return;
   }
 
+  let ynabContext: string;
   try {
-    const ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
+    ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
+  } catch (err) {
+    console.error('[SMS Chat] YNAB error:', err instanceof Error ? err.message : err);
+    twimlReply(res, "Sorry, couldn't reach YNAB to fetch your budget data. Try again in a moment.");
+    return;
+  }
+
+  try {
     const answer = await withTimeout(askClaude(user.name, ynabContext, body), 8000, 'Claude');
     twimlReply(res, answer);
   } catch (err) {
-    console.error('[SMS Chat] Error:', err instanceof Error ? err.message : err);
-    twimlReply(res, 'Sorry, something went wrong fetching your budget data. Try again in a moment.');
+    console.error('[SMS Chat] Claude error:', err instanceof Error ? err.message : err);
+    twimlReply(res, "Sorry, couldn't get a response from the assistant right now. Try again in a moment.");
   }
 }
