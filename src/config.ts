@@ -37,9 +37,14 @@ export function loadConfig(): SmsConfig {
   const path = getConfigPath();
   if (!existsSync(path)) return { users: [] };
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as SmsConfig;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as SmsConfig;
+    if (!Array.isArray(parsed?.users)) {
+      console.error('[Config] Config file missing "users" array — falling back to empty config');
+      return { users: [] };
+    }
+    return parsed;
   } catch (err) {
-    console.error('[Config] Failed to parse config file:', err);
+    console.error('[Config] Failed to parse config file:', err instanceof Error ? err.message : err);
     return { users: [] };
   }
 }

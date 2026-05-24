@@ -7,10 +7,17 @@ import { toUSD } from './utils.js';
 
 const MAX_SMS_LENGTH = 280;
 
+// Module-level client — instantiated once, reused for every inbound SMS
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function twimlReply(res: Response, message: string): void {
   const safe = message.length > MAX_SMS_LENGTH ? message.slice(0, MAX_SMS_LENGTH - 1) + '…' : message;
   res.set('Content-Type', 'text/xml');
-  res.send(`<Response><Message>${safe}</Message></Response>`);
+  res.send(`<Response><Message>${escapeXml(safe)}</Message></Response>`);
 }
 
 function twimlEmpty(res: Response): void {
@@ -20,11 +27,26 @@ function twimlEmpty(res: Response): void {
 
 function validateTwilioSignature(req: Request): boolean {
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!authToken) return false;
+  if (!authToken) {
+    console.error('[SMS] TWILIO_AUTH_TOKEN not set — rejecting request');
+    return false;
+  }
   const signature = req.headers['x-twilio-signature'] as string | undefined;
-  if (!signature) return false;
+  if (!signature) {
+    console.warn('[SMS] Request missing x-twilio-signature — rejecting');
+    return false;
+  }
   const url = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-  return twilio.validateRequest(authToken, signature, url, req.body as Record<string, string>);
+  const valid = twilio.validateRequest(authToken, signature, url, req.body as Record<string, string>);
+  if (!valid) console.warn('[SMS] Invalid Twilio signature — rejecting');
+  return valid;
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  );
+  return Promise.race([promise, timeout]);
 }
 
 async function fetchYnabContext(timezone: string): Promise<string> {
@@ -63,12 +85,7 @@ async function fetchYnabContext(timezone: string): Promise<string> {
 }
 
 async function askClaude(userName: string, ynabContext: string, question: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-
-  const client = new Anthropic({ apiKey });
-
-  const response = await client.messages.create({
+  const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 150,
     system:
@@ -82,11 +99,11 @@ async function askClaude(userName: string, ynabContext: string, question: string
   });
 
   const block = response.content[0];
+  if (!block) return 'Sorry, I could not generate a response.';
   return block.type === 'text' ? block.text : 'Sorry, I could not generate a response.';
 }
 
 export async function handleInboundSms(req: Request, res: Response): Promise<void> {
-  // Validate Twilio signature — reject spoofed requests
   if (!validateTwilioSignature(req)) {
     res.status(403).send('Forbidden');
     return;
@@ -109,11 +126,11 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
   }
 
   try {
-    const ynabContext = await fetchYnabContext(user.timezone);
-    const answer = await askClaude(user.name, ynabContext, body);
+    const ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
+    const answer = await withTimeout(askClaude(user.name, ynabContext, body), 8000, 'Claude');
     twimlReply(res, answer);
   } catch (err) {
-    console.error('[SMS Chat] Error:', err);
+    console.error('[SMS Chat] Error:', err instanceof Error ? err.message : err);
     twimlReply(res, 'Sorry, something went wrong fetching your budget data. Try again in a moment.');
   }
 }
