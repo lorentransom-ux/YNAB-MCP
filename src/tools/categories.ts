@@ -1,10 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling } from '../ynab.js';
+import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
 import { toUSD, buildGoalFields, resolveMonth } from '../utils.js';
 import type { Category } from 'ynab';
 
-function mapCategory(cat: Category, groupName?: string) {
+export function mapCategory(cat: Category, groupName?: string) {
   return {
     id: cat.id,
     name: cat.name,
@@ -46,12 +46,18 @@ export function registerCategoryTools(server: McpServer): void {
 
         if (args.month) {
           const resolvedMonth = resolveMonth(args.month);
-          const response = await api.months.getPlanMonth(planId, resolvedMonth);
+          const response = await cachedFetch(
+            `month:${planId}:${resolvedMonth}`,
+            () => api.months.getPlanMonth(planId, resolvedMonth)
+          );
           categories = response.data.month.categories
             .filter((c) => !c.deleted)
             .map((c) => mapCategory(c));
         } else {
-          const response = await api.categories.getCategories(planId);
+          const response = await cachedFetch(
+            `categories:${planId}`,
+            () => api.categories.getCategories(planId)
+          );
           categories = response.data.category_groups
             .filter((g) => !g.hidden)
             .flatMap((g) =>
@@ -61,7 +67,7 @@ export function registerCategoryTools(server: McpServer): void {
             );
         }
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(categories, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(categories) }] };
       });
     }
   );

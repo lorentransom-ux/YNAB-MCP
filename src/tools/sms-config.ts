@@ -37,7 +37,7 @@ export function registerSmsConfigTools(server: McpServer): void {
       }));
 
       return {
-        content: [{ type: 'text' as const, text: JSON.stringify(display, null, 2) }],
+        content: [{ type: 'text' as const, text: JSON.stringify(display) }],
       };
     }
   );

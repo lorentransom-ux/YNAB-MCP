@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling } from '../ynab.js';
+import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
 import { toUSD } from '../utils.js';
 
 export function registerAccountTools(server: McpServer): void {
@@ -18,7 +18,10 @@ export function registerAccountTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.accounts.getAccounts(planId);
+        const response = await cachedFetch(
+          `accounts:${planId}`,
+          () => api.accounts.getAccounts(planId)
+        );
         const accounts = response.data.accounts
           .filter((a) => !a.deleted)
           .map((a) => ({
@@ -31,7 +34,7 @@ export function registerAccountTools(server: McpServer): void {
             cleared_balance: toUSD(a.cleared_balance),
             uncleared_balance: toUSD(a.uncleared_balance),
           }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(accounts, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(accounts) }] };
       });
     }
   );

@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import twilio from 'twilio';
 import { loadConfig } from './config.js';
-import { getYnabClient } from './ynab.js';
+import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
 
 const MAX_SMS_LENGTH = 280;
@@ -61,8 +61,11 @@ async function fetchYnabContext(timezone: string): Promise<string> {
   const sinceDateStr = sinceDate.toISOString().slice(0, 10);
 
   const [catResponse, txResponse] = await Promise.all([
-    api.categories.getCategories(budgetId),
-    api.transactions.getTransactions(budgetId, sinceDateStr),
+    cachedFetch(`categories:${budgetId}`, () => api.categories.getCategories(budgetId)),
+    cachedFetch(
+      `transactions:${budgetId}:${sinceDateStr}`,
+      () => api.transactions.getTransactions(budgetId, sinceDateStr)
+    ),
   ]);
 
   const categoryLines = catResponse.data.category_groups

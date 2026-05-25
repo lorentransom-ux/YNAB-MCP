@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from 'node-cron';
-import { getYnabClient } from './ynab.js';
+import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
 import { isSmsConfigured, sendSms } from './sms.js';
 import { loadConfig, type UserConfig } from './config.js';
@@ -14,22 +14,23 @@ async function buildMessage(user: UserConfig): Promise<string> {
   const now = new Date();
   const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: user.timezone });
 
-  const response = await api.categories.getCategories(budgetId);
+  const response = await cachedFetch(
+    `categories:${budgetId}`,
+    () => api.categories.getCategories(budgetId)
+  );
   const allCategories = response.data.category_groups.flatMap((g) => g.categories);
 
-  const wanted = new Set(user.categories.map((c) => c.toLowerCase()));
-  const matched = allCategories.filter((cat) => !cat.deleted && wanted.has(cat.name.toLowerCase()));
-
-  const foundNames = new Set(matched.map((c) => c.name.toLowerCase()));
-  for (const name of user.categories) {
-    if (!foundNames.has(name.toLowerCase())) {
-      console.warn(`[Scheduler] Category not found in YNAB for ${user.name}: "${name}"`);
-    }
+  const byName = new Map<string, (typeof allCategories)[number]>();
+  for (const cat of allCategories) {
+    if (!cat.deleted) byName.set(cat.name.toLowerCase(), cat);
   }
 
-  const ordered = user.categories
-    .map((name) => matched.find((c) => c.name.toLowerCase() === name.toLowerCase()))
-    .filter((c): c is NonNullable<typeof c> => c !== undefined);
+  const ordered: typeof allCategories = [];
+  for (const name of user.categories) {
+    const cat = byName.get(name.toLowerCase());
+    if (cat) ordered.push(cat);
+    else console.warn(`[Scheduler] Category not found in YNAB for ${user.name}: "${name}"`);
+  }
 
   const { field, showGoalProgress, headerNote } = user.format;
 
