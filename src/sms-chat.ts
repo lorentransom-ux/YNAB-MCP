@@ -106,9 +106,11 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
   const config = loadConfig();
   const user = config.users.find((u) => u.phone === from);
   if (!user) {
+    console.warn(`[SMS Chat] Ignored message from unrecognized number: ${from}`);
     sendEmpty(res);
     return;
   }
+  console.log(`[SMS Chat] Inbound from ${user.name}: "${body}"`);
 
   let ynabContext: string;
   try {
