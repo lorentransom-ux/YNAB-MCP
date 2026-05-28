@@ -29,6 +29,20 @@ const authCodes = new Map<string, AuthCode>();
 const accessTokens = new Map<string, TokenEntry>();
 const refreshTokens = new Map<string, TokenEntry>();
 
+// Drop expired entries so these maps don't grow unbounded over long uptimes.
+// registeredClients have no expiry (client_secret_expires_at: 0) and are kept.
+function pruneExpired(): void {
+  const now = Date.now();
+  for (const map of [pendingAuths, authCodes, accessTokens, refreshTokens]) {
+    for (const [key, entry] of map) {
+      if (entry.expiresAt < now) map.delete(key);
+    }
+  }
+}
+
+const pruneTimer = setInterval(pruneExpired, 10 * 60 * 1000);
+pruneTimer.unref?.();
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')

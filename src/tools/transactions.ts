@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling } from '../ynab.js';
+import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
 import { toUSD } from '../utils.js';
 import type { TransactionDetail, HybridTransaction } from 'ynab';
 
@@ -40,13 +40,15 @@ export function registerTransactionTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.transactions.getTransactions(planId, args.since_date);
-        let transactions = response.data.transactions.filter((t) => !t.deleted);
-        if (args.until_date) {
-          transactions = transactions.filter((t) => t.date <= args.until_date!);
-        }
+        const response = await cachedFetch(
+          `transactions:${planId}:${args.since_date ?? ''}`,
+          () => api.transactions.getTransactions(planId, args.since_date)
+        );
+        const transactions = response.data.transactions.filter(
+          (t) => !t.deleted && (!args.until_date || t.date <= args.until_date!)
+        );
         return {
-          content: [{ type: 'text' as const, text: JSON.stringify(transactions.map(mapTransaction), null, 2) }],
+          content: [{ type: 'text' as const, text: JSON.stringify(transactions.map(mapTransaction)) }],
         };
       });
     }
@@ -71,15 +73,14 @@ export function registerTransactionTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.transactions.getTransactionsByAccount(
-          planId,
-          args.account_id,
-          args.since_date
+        const response = await cachedFetch(
+          `transactions:account:${planId}:${args.account_id}:${args.since_date ?? ''}`,
+          () => api.transactions.getTransactionsByAccount(planId, args.account_id, args.since_date)
         );
         const transactions = response.data.transactions
           .filter((t) => !t.deleted)
           .map(mapTransaction);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions) }] };
       });
     }
   );
@@ -103,15 +104,14 @@ export function registerTransactionTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.transactions.getTransactionsByCategory(
-          planId,
-          args.category_id,
-          args.since_date
+        const response = await cachedFetch(
+          `transactions:category:${planId}:${args.category_id}:${args.since_date ?? ''}`,
+          () => api.transactions.getTransactionsByCategory(planId, args.category_id, args.since_date)
         );
         const transactions = response.data.transactions
           .filter((t) => !t.deleted)
           .map(mapTransaction);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions) }] };
       });
     }
   );
@@ -135,15 +135,14 @@ export function registerTransactionTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.transactions.getTransactionsByPayee(
-          planId,
-          args.payee_id,
-          args.since_date
+        const response = await cachedFetch(
+          `transactions:payee:${planId}:${args.payee_id}:${args.since_date ?? ''}`,
+          () => api.transactions.getTransactionsByPayee(planId, args.payee_id, args.since_date)
         );
         const transactions = response.data.transactions
           .filter((t) => !t.deleted)
           .map(mapTransaction);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(transactions) }] };
       });
     }
   );

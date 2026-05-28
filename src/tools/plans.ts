@@ -1,5 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { getYnabClient, withYnabErrorHandling } from '../ynab.js';
+import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
 
 export function registerPlanTools(server: McpServer): void {
   server.registerTool(
@@ -10,13 +10,13 @@ export function registerPlanTools(server: McpServer): void {
     async () => {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
-        const response = await api.plans.getPlans();
+        const response = await cachedFetch('plans', () => api.plans.getPlans());
         const plans = response.data.plans.map((p) => ({
           id: p.id,
           name: p.name,
           last_modified_on: p.last_modified_on,
         }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(plans, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(plans) }] };
       });
     }
   );

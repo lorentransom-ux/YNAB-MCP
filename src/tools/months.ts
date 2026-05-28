@@ -1,8 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling } from '../ynab.js';
-import { toUSD, resolveMonth, buildGoalFields } from '../utils.js';
-import type { Category } from 'ynab';
+import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { toUSD, resolveMonth } from '../utils.js';
+import { mapCategory } from './categories.js';
 
 export function registerMonthTools(server: McpServer): void {
   server.registerTool(
@@ -19,7 +19,10 @@ export function registerMonthTools(server: McpServer): void {
       return withYnabErrorHandling(async () => {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
-        const response = await api.months.getPlanMonths(planId);
+        const response = await cachedFetch(
+          `months:${planId}`,
+          () => api.months.getPlanMonths(planId)
+        );
         const months = response.data.months.map((m) => ({
           month: m.month,
           note: m.note ?? null,
@@ -29,7 +32,7 @@ export function registerMonthTools(server: McpServer): void {
           to_be_budgeted: toUSD(m.to_be_budgeted),
           age_of_money: m.age_of_money ?? null,
         }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(months, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(months) }] };
       });
     }
   );
@@ -52,7 +55,10 @@ export function registerMonthTools(server: McpServer): void {
         const api = getYnabClient();
         const planId = args.plan_id ?? 'last-used';
         const resolvedMonth = resolveMonth(args.month);
-        const response = await api.months.getPlanMonth(planId, resolvedMonth);
+        const response = await cachedFetch(
+          `month:${planId}:${resolvedMonth}`,
+          () => api.months.getPlanMonth(planId, resolvedMonth)
+        );
         const m = response.data.month;
 
         const detail = {
@@ -64,20 +70,10 @@ export function registerMonthTools(server: McpServer): void {
           to_be_budgeted: toUSD(m.to_be_budgeted),
           age_of_money: m.age_of_money ?? null,
           categories: m.categories
-            .filter((c: Category) => !c.deleted)
-            .map((c: Category) => ({
-              id: c.id,
-              name: c.name,
-              category_group_id: c.category_group_id,
-              hidden: c.hidden,
-              budgeted: toUSD(c.budgeted),
-              activity: toUSD(c.activity),
-              balance: toUSD(c.balance),
-              note: c.note ?? null,
-              ...buildGoalFields(c),
-            })),
+            .filter((c) => !c.deleted)
+            .map((c) => mapCategory(c)),
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(detail, null, 2) }] };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(detail) }] };
       });
     }
   );
