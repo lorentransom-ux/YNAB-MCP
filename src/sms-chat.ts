@@ -3,15 +3,17 @@ import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig } from './config.js';
 import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
+import { sendSms } from './sms.js';
 
 const MAX_SMS_LENGTH = 280;
 
 // Module-level client — instantiated once, reused for every inbound SMS
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-function sendReply(res: Response, message: string): void {
+async function sendReply(res: Response, to: string, message: string): Promise<void> {
   const safe = message.length > MAX_SMS_LENGTH ? message.slice(0, MAX_SMS_LENGTH - 1) + '…' : message;
-  res.status(200).json({ message: safe });
+  await sendSms(to, safe);
+  res.sendStatus(200);
 }
 
 function sendEmpty(res: Response): void {
@@ -113,15 +115,15 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
     ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
   } catch (err) {
     console.error('[SMS Chat] YNAB error:', err instanceof Error ? err.message : err);
-    sendReply(res, "Sorry, couldn't reach YNAB to fetch your budget data. Try again in a moment.");
+    await sendReply(res, from, "Sorry, couldn't reach YNAB to fetch your budget data. Try again in a moment.");
     return;
   }
 
   try {
     const answer = await withTimeout(askClaude(user.name, ynabContext, body), 8000, 'Claude');
-    sendReply(res, answer);
+    await sendReply(res, from, answer);
   } catch (err) {
     console.error('[SMS Chat] Claude error:', err instanceof Error ? err.message : err);
-    sendReply(res, "Sorry, couldn't get a response from the assistant right now. Try again in a moment.");
+    await sendReply(res, from, "Sorry, couldn't get a response from the assistant right now. Try again in a moment.");
   }
 }
