@@ -1,6 +1,6 @@
 # YNAB MCP Server
 
-A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API for personal budget reporting — designed to be hosted on Railway, connected to Claude.ai as a custom connector, and optionally configured to send scheduled SMS budget summaries via Twilio.
+A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API for personal budget reporting — designed to be hosted on Railway, connected to Claude.ai as a custom connector, and optionally configured to send scheduled SMS budget summaries via Telnyx.
 
 ## Features
 
