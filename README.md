@@ -79,21 +79,25 @@ Dining Out: -$45.00 left
 Entertainment: $80.00 left
 ```
 
-### Twilio Setup
+### Telnyx Setup
 
-1. Create a free account at **twilio.com**
-2. Buy a phone number (~$1/month) — this is the number texts will come from. Save it in your contacts as "YNAB" so it's recognizable.
-3. From the Twilio Console, copy your **Account SID** and **Auth Token**
+1. Create a free account at **telnyx.com** → Mission Control Portal
+2. **Numbers** → Search & Buy → filter for **SMS** → purchase a number. Save it in your contacts as "YNAB" so it's recognizable.
+3. **Messaging** → **Add new profile** → give it a name (e.g. "YNAB") → Save
+4. **My Numbers** → for your number, set the **Messaging Profile** dropdown to your new profile → Save
+5. Back in the Messaging Profile, set the **Inbound Webhook URL** to: `https://your-app.railway.app/sms`
+6. **API Keys** → copy your API key (shown only once — save it)
+
+> **Testing on-net:** Buy two Telnyx numbers to test Telnyx-to-Telnyx messaging immediately without carrier registration. Off-net messaging to external US carriers requires 10DLC or toll-free verification.
 
 ### Environment Variables
 
 Add these to your Railway service's **Variables** tab:
 
 ```
-# Twilio credentials
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_FROM_PHONE=+15559876543
+# Telnyx credentials
+TELNYX_API_KEY=your_api_key_here
+TELNYX_FROM_PHONE=+15559876543
 
 # User 1
 USER1_NAME=Loren
@@ -113,7 +117,7 @@ USER2_TIMEZONE=America/Chicago
 # YNAB_BUDGET_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-All SMS variables are optional. If Twilio credentials are absent the scheduler starts up silently and does nothing. USER1 and USER2 are independent — you can configure just one.
+All SMS variables are optional. If Telnyx credentials are absent the scheduler starts up silently and does nothing. USER1 and USER2 are independent — you can configure just one.
 
 ### Cron Schedule Format
 
@@ -136,7 +140,7 @@ Times are interpreted in the user's `TIMEZONE`. Use any [IANA timezone name](htt
 
 ## SMS Chat — Ask Budget Questions by Text
 
-Text your Twilio number a plain-English question and get a direct answer back. No app, no login — just SMS.
+Text your Telnyx number a plain-English question and get a direct answer back. No app, no login — just SMS.
 
 **Examples:**
 ```
@@ -155,9 +159,7 @@ Replies are kept under 280 characters. Each text is a fresh query — no convers
 ### Setup
 
 1. Add `ANTHROPIC_API_KEY` to your Railway service's **Variables** tab (get one at console.anthropic.com)
-2. In the **Twilio Console** → Phone Numbers → your number → **Messaging** tab:
-   - Set **"A message comes in"** webhook to: `https://your-app.railway.app/sms`
-   - Method: `HTTP POST`
+2. In the **Telnyx Portal** → Messaging Profile → set **Inbound Webhook URL** to: `https://your-app.railway.app/sms`
 
 Only phone numbers listed in `USER1_PHONE` / `USER2_PHONE` will receive replies — texts from other numbers are silently ignored.
 
@@ -165,8 +167,8 @@ Only phone numbers listed in `USER1_PHONE` / `USER2_PHONE` will receive replies 
 
 ```bash
 ngrok http 3000
-# Copy the https URL, set it as the Twilio webhook temporarily
-# Then text your Twilio number and watch the logs
+# Copy the https URL, set it as the Telnyx Messaging Profile webhook temporarily
+# Then text your Telnyx number and watch the logs
 ```
 
 ---
@@ -202,9 +204,9 @@ Claude: [calls ynab_update_sms_config with header_note="Weekly check-in"]
 - `show_goal_progress` — append `(X% funded)` for categories with goals
 - `header_note` — custom line prepended to the message
 
-**What stays in Railway env vars** (phone numbers and Twilio credentials are not updatable via chat):
+**What stays in Railway env vars** (phone numbers and Telnyx credentials are not updatable via chat):
 - `USER1_PHONE`, `USER2_PHONE`
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_PHONE`
+- `TELNYX_API_KEY`, `TELNYX_FROM_PHONE`
 
 ### Config persistence — Railway Volume
 
@@ -232,9 +234,8 @@ YNAB_TOKEN=your_ynab_token_here
 SERVER_URL=http://localhost:3000
 
 # Optional — SMS notifications (omit to disable)
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_FROM_PHONE=+15559876543
+TELNYX_API_KEY=your_api_key_here
+TELNYX_FROM_PHONE=+15559876543
 
 USER1_NAME=Loren
 USER1_PHONE=+15551234567

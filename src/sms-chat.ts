@@ -1,6 +1,5 @@
 import type { Request, Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
-import twilio from 'twilio';
 import { loadConfig } from './config.js';
 import { getYnabClient } from './ynab.js';
 import { toUSD } from './utils.js';
@@ -10,36 +9,13 @@ const MAX_SMS_LENGTH = 280;
 // Module-level client — instantiated once, reused for every inbound SMS
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function twimlReply(res: Response, message: string): void {
+function sendReply(res: Response, message: string): void {
   const safe = message.length > MAX_SMS_LENGTH ? message.slice(0, MAX_SMS_LENGTH - 1) + '…' : message;
-  res.set('Content-Type', 'text/xml');
-  res.send(`<Response><Message>${escapeXml(safe)}</Message></Response>`);
+  res.status(200).json({ message: safe });
 }
 
-function twimlEmpty(res: Response): void {
-  res.set('Content-Type', 'text/xml');
-  res.send('<Response/>');
-}
-
-function validateTwilioSignature(req: Request): boolean {
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!authToken) {
-    console.error('[SMS] TWILIO_AUTH_TOKEN not set — rejecting request');
-    return false;
-  }
-  const signature = req.headers['x-twilio-signature'] as string | undefined;
-  if (!signature) {
-    console.warn('[SMS] Request missing x-twilio-signature — rejecting');
-    return false;
-  }
-  const url = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-  const valid = twilio.validateRequest(authToken, signature, url, req.body as Record<string, string>);
-  if (!valid) console.warn('[SMS] Invalid Twilio signature — rejecting');
-  return valid;
+function sendEmpty(res: Response): void {
+  res.sendStatus(200);
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -104,16 +80,20 @@ async function askClaude(userName: string, ynabContext: string, question: string
 }
 
 export async function handleInboundSms(req: Request, res: Response): Promise<void> {
-  if (!validateTwilioSignature(req)) {
-    res.status(403).send('Forbidden');
+  // Telnyx sends delivery-status events (message.sent, message.finalized) to the same URL —
+  // acknowledge them silently and only process message.received events.
+  const event = (req.body as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
+  if (!event || event.event_type !== 'message.received') {
+    sendEmpty(res);
     return;
   }
 
-  const from = (req.body as Record<string, string>).From ?? '';
-  const body = ((req.body as Record<string, string>).Body ?? '').trim();
+  const payload = event.payload as Record<string, unknown> | undefined;
+  const from = (payload?.from as Record<string, string> | undefined)?.phone_number ?? '';
+  const body = (typeof payload?.text === 'string' ? payload.text : '').trim();
 
   if (!body) {
-    twimlEmpty(res);
+    sendEmpty(res);
     return;
   }
 
@@ -121,7 +101,7 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
   const config = loadConfig();
   const user = config.users.find((u) => u.phone === from);
   if (!user) {
-    twimlEmpty(res);
+    sendEmpty(res);
     return;
   }
 
@@ -130,15 +110,15 @@ export async function handleInboundSms(req: Request, res: Response): Promise<voi
     ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
   } catch (err) {
     console.error('[SMS Chat] YNAB error:', err instanceof Error ? err.message : err);
-    twimlReply(res, "Sorry, couldn't reach YNAB to fetch your budget data. Try again in a moment.");
+    sendReply(res, "Sorry, couldn't reach YNAB to fetch your budget data. Try again in a moment.");
     return;
   }
 
   try {
     const answer = await withTimeout(askClaude(user.name, ynabContext, body), 8000, 'Claude');
-    twimlReply(res, answer);
+    sendReply(res, answer);
   } catch (err) {
     console.error('[SMS Chat] Claude error:', err instanceof Error ? err.message : err);
-    twimlReply(res, "Sorry, couldn't get a response from the assistant right now. Try again in a moment.");
+    sendReply(res, "Sorry, couldn't get a response from the assistant right now. Try again in a moment.");
   }
 }
