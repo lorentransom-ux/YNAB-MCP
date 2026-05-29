@@ -2,7 +2,6 @@ import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
 import { isSmsConfigured, sendSms } from './sms.js';
-import { isEmailSmsConfigured, sendEmailSms } from './email-sms.js';
 import { loadConfig, type UserConfig } from './config.js';
 
 // Tracks active cron tasks by user name so they can be stopped and replaced
@@ -59,11 +58,7 @@ async function runForUser(name: string, phone: string): Promise<void> {
       return;
     }
     const message = await buildMessage(user);
-    if (user.smsGateway && isEmailSmsConfigured()) {
-      await sendEmailSms(phone, user.smsGateway, message);
-    } else {
-      await sendSms(phone, message);
-    }
+    await sendSms(phone, message);
   } catch (err) {
     console.error(`[Scheduler] Error for ${name}:`, err);
   }
@@ -83,7 +78,7 @@ export function refreshUserSchedule(userName: string): void {
     activeTasks.delete(userName);
   }
 
-  if (!isSmsConfigured() && !isEmailSmsConfigured()) return;
+  if (!isSmsConfigured()) return;
 
   const config = loadConfig();
   const user = config.users.find((u) => u.name === userName);
@@ -98,8 +93,8 @@ export function refreshUserSchedule(userName: string): void {
 }
 
 export function initScheduler(): void {
-  if (!isSmsConfigured() && !isEmailSmsConfigured()) {
-    console.log('[Scheduler] No SMS credentials configured — notifications disabled');
+  if (!isSmsConfigured()) {
+    console.log('[Scheduler] Twilio credentials not set — SMS notifications disabled');
     return;
   }
 
