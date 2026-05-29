@@ -15,6 +15,7 @@ export interface UserConfig {
   timezone: string;
   categories: string[];
   format: FormatOptions;
+  smsGateway?: string;
 }
 
 export interface SmsConfig {
@@ -66,6 +67,7 @@ export function seedConfigFromEnv(): void {
     const schedule = process.env[`${prefix}_SCHEDULE`];
     const categoriesRaw = process.env[`${prefix}_CATEGORIES`];
     const timezone = process.env[`${prefix}_TIMEZONE`] ?? 'America/Chicago';
+    const smsGateway = process.env[`${prefix}_SMS_GATEWAY`];
 
     if (!name || !phone || !schedule || !categoriesRaw) continue;
     if (!cron.validate(schedule)) {
@@ -76,7 +78,7 @@ export function seedConfigFromEnv(): void {
     const categories = categoriesRaw.split(',').map((c) => c.trim()).filter(Boolean);
     if (categories.length === 0) continue;
 
-    users.push({ name, phone, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } });
+    users.push({ name, phone, schedule, timezone, categories, format: { ...DEFAULT_FORMAT }, ...(smsGateway ? { smsGateway } : {}) });
   }
 
   if (users.length > 0) {
