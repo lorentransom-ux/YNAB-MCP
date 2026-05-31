@@ -126,8 +126,38 @@ export function applyConfigUpdate(
 
 export function seedConfigFromEnv(): void {
   const path = getConfigPath();
-  if (existsSync(path)) return;
 
+  // Parse the telegram chat IDs declared in env, keyed by lowercased user name.
+  // Used both for initial seeding and for upserting onto an existing config.
+  const envTelegramIds = new Map<string, number>();
+  for (const prefix of ['USER1', 'USER2']) {
+    const name = process.env[`${prefix}_NAME`];
+    const raw = process.env[`${prefix}_TELEGRAM_ID`];
+    if (!name || !raw) continue;
+    const id = Number(raw);
+    if (Number.isInteger(id)) envTelegramIds.set(name.toLowerCase(), id);
+    else console.warn(`[Config] Invalid ${prefix}_TELEGRAM_ID: "${raw}" — ignoring`);
+  }
+
+  // Config already exists — preserve all chat-made edits (categories, schedule,
+  // format), but reconcile telegramChatId from env so setting USERx_TELEGRAM_ID
+  // takes effect on the next deploy without recreating the file.
+  if (existsSync(path)) {
+    const config = loadConfig();
+    let changed = false;
+    for (const user of config.users) {
+      const envId = envTelegramIds.get(user.name.toLowerCase());
+      if (envId !== undefined && user.telegramChatId !== envId) {
+        user.telegramChatId = envId;
+        changed = true;
+        console.log(`[Config] Set telegramChatId for ${user.name} from env`);
+      }
+    }
+    if (changed) saveConfig(config);
+    return;
+  }
+
+  // Fresh config — seed everything from env.
   const users: UserConfig[] = [];
   for (const prefix of ['USER1', 'USER2']) {
     const name = process.env[`${prefix}_NAME`];
@@ -146,12 +176,8 @@ export function seedConfigFromEnv(): void {
 
     const user: UserConfig = { name, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } };
 
-    const telegramIdRaw = process.env[`${prefix}_TELEGRAM_ID`];
-    if (telegramIdRaw) {
-      const telegramChatId = Number(telegramIdRaw);
-      if (Number.isInteger(telegramChatId)) user.telegramChatId = telegramChatId;
-      else console.warn(`[Config] Invalid ${prefix}_TELEGRAM_ID: "${telegramIdRaw}" — ignoring`);
-    }
+    const envId = envTelegramIds.get(name.toLowerCase());
+    if (envId !== undefined) user.telegramChatId = envId;
 
     users.push(user);
   }
