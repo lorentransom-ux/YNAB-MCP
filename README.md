@@ -192,7 +192,18 @@ User config is seeded from your `USERx_*` env vars and saved to `data/config.jso
 2. Mount path: `/data`
 3. Add env var: `CONFIG_PATH=/data/config.json`
 
-Without a volume, the config is re-seeded from your `USER1_*`/`USER2_*` env vars on each restart — which is fine as long as those env vars stay in sync with any manual edits.
+Without a volume, the config file is recreated from your `USER1_*`/`USER2_*` env vars on each restart, so changes made by chatting with the bot are lost on every redeploy — attach a volume if you want those to persist.
+
+### How env vars and chat edits interact
+
+The `USERx_*` env vars **seed the config once**, when `config.json` doesn't yet exist. After the file exists (e.g. on a persistent volume), startup does **not** re-read most of them — so editing `USER2_CATEGORIES`, `USER2_SCHEDULE`, etc. and redeploying has **no effect**. This is intentional: it preserves changes each user makes by chatting with the bot.
+
+So, once seeded:
+
+- **Categories, schedule, timezone, and format** are managed **by chat** ("add Rent to my summary", "send it Fridays at 8am") — instant, no redeploy. The config file is the source of truth.
+- **`USERx_TELEGRAM_ID`** is the exception — it's reconciled from env on every startup, so you can add/change a chat ID via env var + redeploy at any time.
+
+To force a full reseed from env (discarding chat edits), point `CONFIG_PATH` at a fresh filename or detach the volume. Keeping the env vars roughly in sync with the live config is still worthwhile as a recovery baseline for that case.
 
 ---
 
