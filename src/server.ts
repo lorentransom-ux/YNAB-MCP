@@ -7,7 +7,6 @@ import { registerTransactionTools } from './tools/transactions.js';
 import { registerPayeeTools } from './tools/payees.js';
 import { registerScheduledTools } from './tools/scheduled.js';
 import { registerMovementTools } from './tools/movements.js';
-import { registerSmsConfigTools } from './tools/sms-config.js';
 
 export function createMcpServer(): McpServer {
   const server = new McpServer({ name: 'ynab-mcp', version: '1.0.0' });
@@ -19,6 +18,5 @@ export function createMcpServer(): McpServer {
   registerPayeeTools(server);
   registerScheduledTools(server);
   registerMovementTools(server);
-  registerSmsConfigTools(server);
   return server;
 }
