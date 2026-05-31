@@ -4,7 +4,7 @@ import { sendTelegram, webhookSecret } from './telegram.js';
 import { fetchYnabContext, askClaude, withTimeout } from './assistant.js';
 
 // Telegram handles up to 4096 chars; cap replies well under that and let Claude
-// use line breaks / light Markdown (unlike the 280-char SMS segment limit).
+// use line breaks / light Markdown.
 const MAX_TELEGRAM_LENGTH = 1000;
 
 async function sendReply(res: Response, chatId: number, message: string): Promise<void> {

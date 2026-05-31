@@ -1,7 +1,7 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
-import { isSmsConfigured, sendSms } from './sms.js';
+import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, type UserConfig } from './config.js';
 
 // Tracks active cron tasks by user name so they can be stopped and replaced
@@ -48,7 +48,7 @@ async function buildMessage(user: UserConfig): Promise<string> {
   return `${header}YNAB – ${monthLabel} (${user.name})\n${lines.join('\n')}`;
 }
 
-async function runForUser(name: string, phone: string): Promise<void> {
+async function runForUser(name: string, chatId: number): Promise<void> {
   console.log(`[Scheduler] Firing for ${name}`);
   try {
     const config = loadConfig();
@@ -58,50 +58,33 @@ async function runForUser(name: string, phone: string): Promise<void> {
       return;
     }
     const message = await buildMessage(user);
-    await sendSms(phone, message);
+    await sendTelegram(chatId, message);
   } catch (err) {
     console.error(`[Scheduler] Error for ${name}:`, err);
   }
 }
 
 function registerTask(user: UserConfig): void {
-  const { name, phone, schedule, timezone } = user;
-  const task = cron.schedule(schedule, () => { void runForUser(name, phone); }, { timezone });
+  const { name, telegramChatId, schedule, timezone } = user;
+  if (telegramChatId === undefined) {
+    console.warn(`[Scheduler] No telegramChatId for ${name} — skipping (can't deliver digest)`);
+    return;
+  }
+  const task = cron.schedule(schedule, () => { void runForUser(name, telegramChatId); }, { timezone });
   activeTasks.set(name, task);
   console.log(`[Scheduler] Registered: ${name} | schedule="${schedule}" | tz=${timezone} | categories=[${user.categories.join(', ')}]`);
 }
 
-export function refreshUserSchedule(userName: string): void {
-  const existing = activeTasks.get(userName);
-  if (existing) {
-    existing.stop();
-    activeTasks.delete(userName);
-  }
-
-  if (!isSmsConfigured()) return;
-
-  const config = loadConfig();
-  const user = config.users.find((u) => u.name === userName);
-  if (!user) return;
-
-  if (!cron.validate(user.schedule)) {
-    console.warn(`[Scheduler] Invalid schedule for ${user.name}: "${user.schedule}" — not registering`);
-    return;
-  }
-
-  registerTask(user);
-}
-
 export function initScheduler(): void {
-  if (!isSmsConfigured()) {
-    console.log('[Scheduler] Twilio credentials not set — SMS notifications disabled');
+  if (!isTelegramConfigured()) {
+    console.log('[Scheduler] TELEGRAM_BOT_TOKEN not set — scheduled digests disabled');
     return;
   }
 
   const config = loadConfig();
 
   if (config.users.length === 0) {
-    console.log('[Scheduler] No users configured — SMS notifications disabled');
+    console.log('[Scheduler] No users configured — scheduled digests disabled');
     return;
   }
 

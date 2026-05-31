@@ -1,10 +1,10 @@
 # YNAB MCP Server
 
-A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API for personal budget reporting — designed to be hosted on Railway, connected to Claude.ai as a custom connector, and optionally configured to send scheduled SMS budget summaries via Twilio.
+A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API for personal budget reporting — designed to be hosted on Railway, connected to Claude.ai as a custom connector, and optionally configured to send scheduled budget summaries and answer budget questions over Telegram.
 
 ## Features
 
-12 read-only budget tools plus 2 tools for managing SMS notifications — all accessible via Claude chat.
+12 read-only budget tools, all accessible via Claude chat.
 
 **Budget tools:**
 
@@ -23,14 +23,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_movements` | Account-to-account transfers |
 
-**SMS config tools** (chat with Claude to update — no dashboard needed):
-
-| Tool | Description |
-|------|-------------|
-| `ynab_get_sms_config` | Show current notification config for all users |
-| `ynab_update_sms_config` | Update categories, schedule, timezone, or message format for a user |
-
-Plus optional scheduled SMS notifications — each person gets their own schedule and category list, delivered as standard SMS to their existing phone.
+Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, and can ask plain-English budget questions any time — no phone number, carrier registration, or 10DLC required.
 
 ---
 
@@ -67,11 +60,16 @@ Claude.ai will open a page on your Railway server asking **"Authorize YNAB acces
 
 ---
 
-## SMS Notifications (Optional)
+## Telegram — Digests & Budget Chat (Optional)
 
-The server can text each person a summary of their chosen YNAB category balances on a schedule they control. Texts are delivered as standard SMS to their existing cell phones — no new numbers or apps needed.
+The server can, over a Telegram bot:
 
-**Example message:**
+- **Send a scheduled digest** of each person's chosen YNAB category balances, on a schedule they control.
+- **Answer plain-English budget questions** any time the user messages the bot.
+
+No phone number, no carrier registration, no 10DLC — a Telegram bot is free and works anywhere. Both features reuse the same YNAB-fetch + Claude logic (`src/assistant.ts`).
+
+**Example digest:**
 ```
 YNAB – May 2026 (Loren)
 Groceries: $156.23 left
@@ -79,52 +77,63 @@ Dining Out: -$45.00 left
 Entertainment: $80.00 left
 ```
 
-### Telnyx Setup
+**Example chat:**
+```
+You: How much is left in groceries?
+YNAB: Groceries: $87.43 left this month.
 
-1. Create a free account at **telnyx.com** → Mission Control Portal
-2. **Numbers** → Search & Buy → filter for **SMS** → purchase a number. Save it in your contacts as "YNAB" so it's recognizable.
-3. **Messaging** → **Add new profile** → give it a name (e.g. "YNAB") → Save
-4. **My Numbers** → for your number, set the **Messaging Profile** dropdown to your new profile → Save
-5. Back in the Messaging Profile, set the **Inbound Webhook URL** to: `https://your-app.railway.app/sms`
-6. **API Keys** → copy your API key (shown only once — save it)
+You: How much did we spend eating out this week?
+YNAB: Dining Out activity last 14 days: $124.50 across 6 transactions.
 
-> **Testing on-net:** Buy two Telnyx numbers to test Telnyx-to-Telnyx messaging immediately without carrier registration. Off-net messaging to external US carriers requires 10DLC or toll-free verification.
+You: Are we over budget anywhere?
+YNAB: Yes — Clothing is -$23.10 and Entertainment is -$8.00.
+```
+
+Chat replies are kept under ~1000 characters and may use light Markdown. Each message is a fresh query — no conversation history is retained between messages.
+
+### Setup
+
+1. **Create a bot:** message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot` → copy the token it gives you.
+2. Add `ANTHROPIC_API_KEY` (from console.anthropic.com) and `TELEGRAM_BOT_TOKEN` to your Railway service's **Variables** tab. Optionally set `TELEGRAM_WEBHOOK_SECRET` to any random string for webhook verification.
+3. **Deploy.** On startup the server automatically registers its webhook with Telegram, pointing at `https://your-app.railway.app/telegram` (it uses your `SERVER_URL`, which must be HTTPS).
+4. **Find each chat ID:** have the user send any message to the bot. The server logs `[Telegram Chat] Ignored message from unrecognized chat: <id>` — that `<id>` is their numeric chat ID.
+5. Add that ID to the user via `USER1_TELEGRAM_ID` / `USER2_TELEGRAM_ID` (env var) or by editing `telegramChatId` in `data/config.json`. Redeploy/restart if you used the env var.
+6. The user messages the bot again and gets budget answers, and their scheduled digest now delivers to that chat.
+
+Only chat IDs listed in a user's `telegramChatId` will receive replies or digests — messages from other chats are logged and ignored.
 
 ### Environment Variables
 
 Add these to your Railway service's **Variables** tab:
 
 ```
-# Telnyx credentials
-TELNYX_API_KEY=your_api_key_here
-TELNYX_FROM_PHONE=+15559876543
-
-# Telegram credentials (optional — enables the Telegram chat path)
+# Telegram credentials
 TELEGRAM_BOT_TOKEN=123456:ABC-your-bot-token-from-botfather
 # Optional but recommended — an arbitrary string you invent; verifies inbound webhooks
 TELEGRAM_WEBHOOK_SECRET=some-long-random-string
 
+# Claude (required for budget chat)
+ANTHROPIC_API_KEY=your_anthropic_key_here
+
 # User 1
 USER1_NAME=Loren
-USER1_PHONE=+15551234567
 USER1_SCHEDULE=0 8 * * 1
 USER1_CATEGORIES=Groceries,Dining Out,Entertainment
 USER1_TIMEZONE=America/Chicago
+USER1_TELEGRAM_ID=123456789
 
 # User 2
 USER2_NAME=Wife
-USER2_PHONE=+15557654321
 USER2_SCHEDULE=0 9 * * 5
 USER2_CATEGORIES=Groceries,Clothing,Personal Care
 USER2_TIMEZONE=America/Chicago
-# Optional: this user's numeric Telegram chat ID — enables Telegram chat for them
-# USER2_TELEGRAM_ID=123456789
+USER2_TELEGRAM_ID=987654321
 
 # Optional: pin to a specific YNAB budget ID (defaults to your last-used budget)
 # YNAB_BUDGET_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-All SMS variables are optional. If Telnyx credentials are absent the scheduler starts up silently and does nothing. USER1 and USER2 are independent — you can configure just one. `TELEGRAM_BOT_TOKEN` and `USERx_TELEGRAM_ID` are also optional and additive — see [Telegram Chat](#telegram-chat--ask-budget-questions-on-telegram) below.
+All Telegram variables are optional. If `TELEGRAM_BOT_TOKEN` is absent the scheduler starts up silently and does nothing, and the chat endpoint is disabled. USER1 and USER2 are independent — you can configure just one. A user's `USERx_TELEGRAM_ID` can be added after the fact (see step 4 above); until it's set, that user won't receive a digest.
 
 ### Cron Schedule Format
 
@@ -143,60 +152,6 @@ Times are interpreted in the user's `TIMEZONE`. Use any [IANA timezone name](htt
 
 `USER_CATEGORIES` is a comma-separated list of YNAB category names, spelled exactly as they appear in your budget (case-insensitive). Each user gets their own list — the balance shown is the remaining balance for the current month.
 
----
-
-## SMS Chat — Ask Budget Questions by Text
-
-Text your Telnyx number a plain-English question and get a direct answer back. No app, no login — just SMS.
-
-**Examples:**
-```
-You: How much is left in groceries?
-YNAB: Groceries: $87.43 left this month.
-
-You: How much did we spend eating out this week?
-YNAB: Dining Out activity last 14 days: $124.50 across 6 transactions.
-
-You: Are we over budget anywhere?
-YNAB: Yes — Clothing is -$23.10 and Entertainment is -$8.00.
-```
-
-Replies are kept under 280 characters. Each text is a fresh query — no conversation history is retained between messages.
-
-### Setup
-
-1. Add `ANTHROPIC_API_KEY` to your Railway service's **Variables** tab (get one at console.anthropic.com)
-2. In the **Telnyx Portal** → Messaging Profile → set **Inbound Webhook URL** to: `https://your-app.railway.app/sms`
-
-Only phone numbers listed in `USER1_PHONE` / `USER2_PHONE` will receive replies — texts from other numbers are silently ignored.
-
-### Local testing with ngrok
-
-```bash
-ngrok http 3000
-# Copy the https URL, set it as the Telnyx Messaging Profile webhook temporarily
-# Then text your Telnyx number and watch the logs
-```
-
----
-
-## Telegram Chat — Ask Budget Questions on Telegram
-
-The same plain-English Q&A as SMS, over a Telegram bot. No phone number, no carrier registration, no 10DLC — which makes it a clean alternative when maintaining a registered SMS number isn't worth the compliance overhead.
-
-This path is **purely additive**: it reuses the exact same YNAB-fetch + Claude logic as SMS (`src/assistant.ts`), and the SMS path keeps working untouched. A user can be reachable by SMS, Telegram, or both. Replies can be a bit longer than SMS (up to ~1000 characters) and may use light Markdown.
-
-### Setup
-
-1. **Create a bot:** message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot` → copy the token it gives you.
-2. Set `TELEGRAM_BOT_TOKEN` (and `ANTHROPIC_API_KEY`, if not already set) in your Railway service's **Variables** tab. Optionally set `TELEGRAM_WEBHOOK_SECRET` to any random string for webhook verification.
-3. **Deploy.** On startup the server automatically registers its webhook with Telegram, pointing at `https://your-app.railway.app/telegram` (it uses your `SERVER_URL`, which must be HTTPS).
-4. **Find the chat ID:** have the user send any message to the bot. The server logs `[Telegram Chat] Ignored message from unrecognized chat: <id>` — that `<id>` is their numeric chat ID.
-5. Add that ID to the user, either via `USER2_TELEGRAM_ID=<id>` (env var) or by editing `telegramChatId` in `data/sms-config.json`. Redeploy/restart if you used the env var.
-6. The user messages the bot again and gets budget answers.
-
-Only chat IDs listed in a user's `telegramChatId` will receive replies — messages from other chats are logged and ignored.
-
 ### Security notes
 
 - The bot token is used **outbound only** (your server → Telegram) and is never logged.
@@ -212,52 +167,15 @@ ngrok http 3000
 # Then message your bot and watch the logs.
 ```
 
----
-
-## Adjusting SMS Config via Claude Chat
-
-Once the server is running and connected to Claude.ai, you can update your SMS settings conversationally — no Railway dashboard needed for day-to-day changes.
-
-**Example conversations:**
-
-```
-You: Show me my current SMS config
-Claude: [calls ynab_get_sms_config]
-
-You: Add "Rent" and "Utilities" to my text
-Claude: [calls ynab_update_sms_config → updates Loren's category list]
-
-You: Move my wife's text to Wednesday mornings at 9
-Claude: [calls ynab_update_sms_config with schedule="0 9 * * 3"]
-
-You: Show both of us the budgeted amount instead of remaining balance
-Claude: [calls ynab_update_sms_config twice, once per user, with format_field="budgeted"]
-
-You: Add a header note to my text that says "Weekly check-in"
-Claude: [calls ynab_update_sms_config with header_note="Weekly check-in"]
-```
-
-**What's adjustable per user:**
-- `categories` — which YNAB categories appear (full replacement list)
-- `schedule` — when texts fire (cron expression; takes effect immediately)
-- `timezone` — IANA timezone for schedule and month label
-- `format_field` — which dollar amount to show: `balance` (remaining), `budgeted`, or `activity` (spent)
-- `show_goal_progress` — append `(X% funded)` for categories with goals
-- `header_note` — custom line prepended to the message
-
-**What stays in Railway env vars** (phone numbers and Telnyx credentials are not updatable via chat):
-- `USER1_PHONE`, `USER2_PHONE`
-- `TELNYX_API_KEY`, `TELNYX_FROM_PHONE`
-
 ### Config persistence — Railway Volume
 
-Config changes made via Claude are saved to `data/sms-config.json`. On Railway, this file lives on the service's ephemeral filesystem and **resets on redeploy** unless you attach a persistent volume:
+User config is seeded from your `USERx_*` env vars and saved to `data/config.json`. On Railway, this file lives on the service's ephemeral filesystem and **resets on redeploy** unless you attach a persistent volume:
 
 1. Railway dashboard → your service → **Volumes** tab → **Add Volume**
 2. Mount path: `/data`
-3. Add env var: `SMS_CONFIG_PATH=/data/sms-config.json`
+3. Add env var: `CONFIG_PATH=/data/config.json`
 
-Without a volume, the config is re-seeded from your `USER1_*`/`USER2_*` env vars on each restart — which is fine, but any changes made via Claude will be lost on the next deploy.
+Without a volume, the config is re-seeded from your `USER1_*`/`USER2_*` env vars on each restart — which is fine as long as those env vars stay in sync with any manual edits.
 
 ---
 
@@ -274,24 +192,25 @@ Create a `.env` file in the project root (it's gitignored):
 YNAB_TOKEN=your_ynab_token_here
 SERVER_URL=http://localhost:3000
 
-# Optional — SMS notifications (omit to disable)
-TELNYX_API_KEY=your_api_key_here
-TELNYX_FROM_PHONE=+15559876543
+# Optional — Telegram integration (omit to disable)
+ANTHROPIC_API_KEY=your_anthropic_key_here
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_WEBHOOK_SECRET=some-long-random-string
 
 USER1_NAME=Loren
-USER1_PHONE=+15551234567
 USER1_SCHEDULE=*/2 * * * *
 USER1_CATEGORIES=Groceries,Dining Out
 USER1_TIMEZONE=America/Chicago
+USER1_TELEGRAM_ID=123456789
 
 USER2_NAME=Wife
-USER2_PHONE=+15557654321
 USER2_SCHEDULE=0 9 * * 5
 USER2_CATEGORIES=Groceries,Clothing
 USER2_TIMEZONE=America/Chicago
+USER2_TELEGRAM_ID=987654321
 ```
 
-> **Tip:** For local testing, set `USER1_SCHEDULE=*/2 * * * *` to fire every 2 minutes so you can verify a text arrives quickly, then change it to your real schedule before deploying.
+> **Tip:** For local testing, set `USER1_SCHEDULE=*/2 * * * *` to fire every 2 minutes so you can verify a digest arrives quickly, then change it to your real schedule before deploying.
 
 Then run:
 
@@ -309,14 +228,14 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 - **Auth**: OAuth 2.0 with dynamic client registration and PKCE. Claude.ai registers itself automatically; you approve access once in your browser.
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
-- **Scheduler**: Optional background worker (`node-cron`) that fires on configured cron schedules, fetches YNAB category balances, and sends SMS summaries via Twilio. Initializes at server startup; silently no-ops if Twilio credentials are absent.
+- **Scheduler**: Optional background worker (`node-cron`) that fires on configured cron schedules, fetches YNAB category balances, and sends digests via Telegram. Initializes at server startup; silently no-ops if `TELEGRAM_BOT_TOKEN` is absent.
 
 ---
 
 ## Security
 
 - Your YNAB Personal Access Token is only read from the environment — never committed to code
-- Twilio credentials and recipient phone numbers are environment-only — never in code or logs
+- The Telegram bot token is environment-only and used outbound only — never in code or logs
 - All tools are read-only; no write operations are exposed
 - Access requires explicit approval in your browser — unapproved requests are rejected
 - PKCE prevents authorization codes from being stolen or replayed

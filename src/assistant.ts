@@ -2,8 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getYnabClient, cachedFetch } from './ynab.js';
 import { toUSD } from './utils.js';
 
-// Module-level client — instantiated once, reused for every inbound message
-// across all transports (SMS, Telegram).
+// Module-level client — instantiated once, reused for every inbound Telegram message.
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

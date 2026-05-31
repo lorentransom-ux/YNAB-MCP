@@ -10,17 +10,17 @@ export interface FormatOptions {
 
 export interface UserConfig {
   name: string;
-  phone: string;
   schedule: string;
   timezone: string;
   categories: string[];
   format: FormatOptions;
-  // Optional Telegram chat ID. When set, this user can also reach the assistant
-  // over Telegram (in addition to SMS). Numeric, as supplied by Telegram updates.
+  // Numeric Telegram chat ID — how this user receives their scheduled digest and is
+  // authorized for chat. Optional so a user can be configured before their chat ID is
+  // known (discover it from the unrecognized-chat log line, then add it).
   telegramChatId?: number;
 }
 
-export interface SmsConfig {
+export interface AppConfig {
   users: UserConfig[];
 }
 
@@ -31,16 +31,16 @@ const DEFAULT_FORMAT: FormatOptions = {
 };
 
 export function getConfigPath(): string {
-  if (process.env.SMS_CONFIG_PATH) return process.env.SMS_CONFIG_PATH;
-  // Resolves to <project-root>/data/sms-config.json whether running from src/ or dist/
-  return new URL('../data/sms-config.json', import.meta.url).pathname;
+  if (process.env.CONFIG_PATH) return process.env.CONFIG_PATH;
+  // Resolves to <project-root>/data/config.json whether running from src/ or dist/
+  return new URL('../data/config.json', import.meta.url).pathname;
 }
 
-export function loadConfig(): SmsConfig {
+export function loadConfig(): AppConfig {
   const path = getConfigPath();
   if (!existsSync(path)) return { users: [] };
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as SmsConfig;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as AppConfig;
     if (!Array.isArray(parsed?.users)) {
       console.error('[Config] Config file missing "users" array — falling back to empty config');
       return { users: [] };
@@ -52,7 +52,7 @@ export function loadConfig(): SmsConfig {
   }
 }
 
-export function saveConfig(config: SmsConfig): void {
+export function saveConfig(config: AppConfig): void {
   const path = getConfigPath();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
@@ -65,12 +65,11 @@ export function seedConfigFromEnv(): void {
   const users: UserConfig[] = [];
   for (const prefix of ['USER1', 'USER2']) {
     const name = process.env[`${prefix}_NAME`];
-    const phone = process.env[`${prefix}_PHONE`];
     const schedule = process.env[`${prefix}_SCHEDULE`];
     const categoriesRaw = process.env[`${prefix}_CATEGORIES`];
     const timezone = process.env[`${prefix}_TIMEZONE`] ?? 'America/Chicago';
 
-    if (!name || !phone || !schedule || !categoriesRaw) continue;
+    if (!name || !schedule || !categoriesRaw) continue;
     if (!cron.validate(schedule)) {
       console.warn(`[Config] Invalid cron expression for ${prefix}: "${schedule}" — skipping`);
       continue;
@@ -79,7 +78,7 @@ export function seedConfigFromEnv(): void {
     const categories = categoriesRaw.split(',').map((c) => c.trim()).filter(Boolean);
     if (categories.length === 0) continue;
 
-    const user: UserConfig = { name, phone, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } };
+    const user: UserConfig = { name, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } };
 
     const telegramIdRaw = process.env[`${prefix}_TELEGRAM_ID`];
     if (telegramIdRaw) {
