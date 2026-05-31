@@ -64,8 +64,8 @@ export async function handleInboundTelegram(req: Request, res: Response): Promis
 
   try {
     const answer = await withTimeout(
-      askClaude(user.name, ynabContext, body, MAX_TELEGRAM_LENGTH),
-      8000,
+      askClaude(user, ynabContext, body, MAX_TELEGRAM_LENGTH),
+      15000,
       'Claude'
     );
     await sendReply(res, chatId, answer);

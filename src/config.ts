@@ -58,6 +58,72 @@ export function saveConfig(config: AppConfig): void {
   writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
 }
 
+export interface ConfigUpdate {
+  categories?: string[];
+  schedule?: string;
+  timezone?: string;
+  format_field?: FormatOptions['field'];
+  show_goal_progress?: boolean;
+  header_note?: string;
+}
+
+// Validates and persists a partial update to one user's digest settings, identified
+// by name. Returns the list of human-readable changes applied, or an error string.
+// Does not touch the cron scheduler — callers refresh the schedule if it changed.
+export function applyConfigUpdate(
+  userName: string,
+  update: ConfigUpdate
+): { changes: string[] } | { error: string } {
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
+  if (!user) {
+    const names = config.users.map((u) => u.name).join(', ') || 'none';
+    return { error: `User "${userName}" not found. Configured users: ${names}` };
+  }
+
+  if (update.schedule !== undefined && !cron.validate(update.schedule)) {
+    return { error: `Invalid cron expression: "${update.schedule}". Example: "0 8 * * 1" for Monday 8am.` };
+  }
+  if (update.timezone !== undefined) {
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: update.timezone });
+    } catch {
+      return { error: `Invalid timezone: "${update.timezone}". Use an IANA name like "America/Chicago".` };
+    }
+  }
+
+  const changes: string[] = [];
+  if (update.categories !== undefined) {
+    changes.push(`categories: [${update.categories.join(', ')}]`);
+    user.categories = update.categories;
+  }
+  if (update.schedule !== undefined) {
+    changes.push(`schedule: "${update.schedule}"`);
+    user.schedule = update.schedule;
+  }
+  if (update.timezone !== undefined) {
+    changes.push(`timezone: ${update.timezone}`);
+    user.timezone = update.timezone;
+  }
+  if (update.format_field !== undefined) {
+    changes.push(`amount shown: ${update.format_field}`);
+    user.format.field = update.format_field;
+  }
+  if (update.show_goal_progress !== undefined) {
+    changes.push(`goal progress: ${update.show_goal_progress ? 'on' : 'off'}`);
+    user.format.showGoalProgress = update.show_goal_progress;
+  }
+  if (update.header_note !== undefined) {
+    changes.push(`header note: "${update.header_note}"`);
+    user.format.headerNote = update.header_note;
+  }
+
+  if (changes.length === 0) return { changes };
+
+  saveConfig(config);
+  return { changes };
+}
+
 export function seedConfigFromEnv(): void {
   const path = getConfigPath();
   if (existsSync(path)) return;

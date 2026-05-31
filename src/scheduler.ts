@@ -75,6 +75,29 @@ function registerTask(user: UserConfig): void {
   console.log(`[Scheduler] Registered: ${name} | schedule="${schedule}" | tz=${timezone} | categories=[${user.categories.join(', ')}]`);
 }
 
+// Re-register a single user's cron task after their config changes (e.g. via the
+// ynab_update_config chat tool), so schedule/timezone edits take effect immediately.
+export function refreshUserSchedule(userName: string): void {
+  const existing = activeTasks.get(userName);
+  if (existing) {
+    existing.stop();
+    activeTasks.delete(userName);
+  }
+
+  if (!isTelegramConfigured()) return;
+
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name === userName);
+  if (!user) return;
+
+  if (!cron.validate(user.schedule)) {
+    console.warn(`[Scheduler] Invalid schedule for ${user.name}: "${user.schedule}" — not registering`);
+    return;
+  }
+
+  registerTask(user);
+}
+
 export function initScheduler(): void {
   if (!isTelegramConfigured()) {
     console.log('[Scheduler] TELEGRAM_BOT_TOKEN not set — scheduled digests disabled');

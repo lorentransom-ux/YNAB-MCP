@@ -23,7 +23,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_movements` | Account-to-account transfers |
 
-Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, and can ask plain-English budget questions any time — no phone number, carrier registration, or 10DLC required.
+Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, can ask plain-English budget questions any time, and can adjust their own digest settings just by chatting — no phone number, carrier registration, or 10DLC required.
 
 ---
 
@@ -90,6 +90,23 @@ YNAB: Yes — Clothing is -$23.10 and Entertainment is -$8.00.
 ```
 
 Chat replies are kept under ~1000 characters and may use light Markdown. Each message is a fresh query — no conversation history is retained between messages.
+
+### Adjusting your digest by chat
+
+Each person can change **their own** digest just by messaging the bot — no dashboard or env-var edit needed. Behind the scenes the assistant has a `ynab_update_config` tool, scoped to the chatting user (it can't touch anyone else's settings).
+
+```
+You: Add Rent and Utilities to my weekly summary
+YNAB: Done — your digest now shows Groceries, Clothing, Rent, Utilities.
+
+You: Send it Fridays at 8am instead
+YNAB: Updated — your digest now sends at 8:00am on Fridays.
+
+You: Show budgeted amounts instead of what's left
+YNAB: Updated — your digest now shows the budgeted amount per category.
+```
+
+Adjustable by chat: which **categories** appear (add/remove), the **schedule** (cron) and **timezone**, the **amount shown** (remaining balance / budgeted / activity), **goal-progress** display, and a custom **header note**. Schedule and timezone changes take effect immediately. Changes are saved to `data/config.json`.
 
 ### Setup
 
