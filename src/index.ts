@@ -9,6 +9,8 @@ import { oauthProvider, handleApproval } from './oauth.js';
 import { initScheduler } from './scheduler.js';
 import { seedConfigFromEnv } from './config.js';
 import { handleInboundSms } from './sms-chat.js';
+import { handleInboundTelegram } from './telegram-chat.js';
+import { isTelegramConfigured, registerTelegramWebhook } from './telegram.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const SERVER_URL = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
@@ -47,6 +49,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.post('/sms', handleInboundSms);
+app.post('/telegram', handleInboundTelegram);
 
 const bearerAuth = requireBearerAuth({ verifier: oauthProvider });
 
@@ -124,6 +127,14 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[YNAB-MCP] Server URL: ${SERVER_URL}`);
   if (!process.env.YNAB_TOKEN) {
     console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN is not set');
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.warn('[YNAB-MCP] WARNING: ANTHROPIC_API_KEY is not set — inbound chat (SMS/Telegram) will fail on first message');
+  }
+  if (!isTelegramConfigured()) {
+    console.warn('[YNAB-MCP] WARNING: TELEGRAM_BOT_TOKEN is not set — Telegram chat disabled');
+  } else {
+    void registerTelegramWebhook(SERVER_URL);
   }
   seedConfigFromEnv();
   initScheduler();

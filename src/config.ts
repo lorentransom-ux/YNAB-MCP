@@ -15,6 +15,9 @@ export interface UserConfig {
   timezone: string;
   categories: string[];
   format: FormatOptions;
+  // Optional Telegram chat ID. When set, this user can also reach the assistant
+  // over Telegram (in addition to SMS). Numeric, as supplied by Telegram updates.
+  telegramChatId?: number;
 }
 
 export interface SmsConfig {
@@ -76,7 +79,16 @@ export function seedConfigFromEnv(): void {
     const categories = categoriesRaw.split(',').map((c) => c.trim()).filter(Boolean);
     if (categories.length === 0) continue;
 
-    users.push({ name, phone, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } });
+    const user: UserConfig = { name, phone, schedule, timezone, categories, format: { ...DEFAULT_FORMAT } };
+
+    const telegramIdRaw = process.env[`${prefix}_TELEGRAM_ID`];
+    if (telegramIdRaw) {
+      const telegramChatId = Number(telegramIdRaw);
+      if (Number.isInteger(telegramChatId)) user.telegramChatId = telegramChatId;
+      else console.warn(`[Config] Invalid ${prefix}_TELEGRAM_ID: "${telegramIdRaw}" — ignoring`);
+    }
+
+    users.push(user);
   }
 
   if (users.length > 0) {

@@ -99,6 +99,11 @@ Add these to your Railway service's **Variables** tab:
 TELNYX_API_KEY=your_api_key_here
 TELNYX_FROM_PHONE=+15559876543
 
+# Telegram credentials (optional — enables the Telegram chat path)
+TELEGRAM_BOT_TOKEN=123456:ABC-your-bot-token-from-botfather
+# Optional but recommended — an arbitrary string you invent; verifies inbound webhooks
+TELEGRAM_WEBHOOK_SECRET=some-long-random-string
+
 # User 1
 USER1_NAME=Loren
 USER1_PHONE=+15551234567
@@ -112,12 +117,14 @@ USER2_PHONE=+15557654321
 USER2_SCHEDULE=0 9 * * 5
 USER2_CATEGORIES=Groceries,Clothing,Personal Care
 USER2_TIMEZONE=America/Chicago
+# Optional: this user's numeric Telegram chat ID — enables Telegram chat for them
+# USER2_TELEGRAM_ID=123456789
 
 # Optional: pin to a specific YNAB budget ID (defaults to your last-used budget)
 # YNAB_BUDGET_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-All SMS variables are optional. If Telnyx credentials are absent the scheduler starts up silently and does nothing. USER1 and USER2 are independent — you can configure just one.
+All SMS variables are optional. If Telnyx credentials are absent the scheduler starts up silently and does nothing. USER1 and USER2 are independent — you can configure just one. `TELEGRAM_BOT_TOKEN` and `USERx_TELEGRAM_ID` are also optional and additive — see [Telegram Chat](#telegram-chat--ask-budget-questions-on-telegram) below.
 
 ### Cron Schedule Format
 
@@ -169,6 +176,40 @@ Only phone numbers listed in `USER1_PHONE` / `USER2_PHONE` will receive replies 
 ngrok http 3000
 # Copy the https URL, set it as the Telnyx Messaging Profile webhook temporarily
 # Then text your Telnyx number and watch the logs
+```
+
+---
+
+## Telegram Chat — Ask Budget Questions on Telegram
+
+The same plain-English Q&A as SMS, over a Telegram bot. No phone number, no carrier registration, no 10DLC — which makes it a clean alternative when maintaining a registered SMS number isn't worth the compliance overhead.
+
+This path is **purely additive**: it reuses the exact same YNAB-fetch + Claude logic as SMS (`src/assistant.ts`), and the SMS path keeps working untouched. A user can be reachable by SMS, Telegram, or both. Replies can be a bit longer than SMS (up to ~1000 characters) and may use light Markdown.
+
+### Setup
+
+1. **Create a bot:** message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot` → copy the token it gives you.
+2. Set `TELEGRAM_BOT_TOKEN` (and `ANTHROPIC_API_KEY`, if not already set) in your Railway service's **Variables** tab. Optionally set `TELEGRAM_WEBHOOK_SECRET` to any random string for webhook verification.
+3. **Deploy.** On startup the server automatically registers its webhook with Telegram, pointing at `https://your-app.railway.app/telegram` (it uses your `SERVER_URL`, which must be HTTPS).
+4. **Find the chat ID:** have the user send any message to the bot. The server logs `[Telegram Chat] Ignored message from unrecognized chat: <id>` — that `<id>` is their numeric chat ID.
+5. Add that ID to the user, either via `USER2_TELEGRAM_ID=<id>` (env var) or by editing `telegramChatId` in `data/sms-config.json`. Redeploy/restart if you used the env var.
+6. The user messages the bot again and gets budget answers.
+
+Only chat IDs listed in a user's `telegramChatId` will receive replies — messages from other chats are logged and ignored.
+
+### Security notes
+
+- The bot token is used **outbound only** (your server → Telegram) and is never logged.
+- When `TELEGRAM_WEBHOOK_SECRET` is set, Telegram echoes it back in the `X-Telegram-Bot-Api-Secret-Token` header on every webhook, and the `/telegram` endpoint rejects any request whose header doesn't match — this stops anyone from spoofing a webhook to a known chat ID.
+
+### Local testing with ngrok
+
+```bash
+ngrok http 3000
+# Set SERVER_URL to the https ngrok URL and restart so setWebhook points at it,
+# or call setWebhook manually:
+#   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<ngrok>.ngrok.io/telegram"
+# Then message your bot and watch the logs.
 ```
 
 ---
