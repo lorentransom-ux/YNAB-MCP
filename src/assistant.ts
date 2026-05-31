@@ -105,7 +105,7 @@ export async function fetchYnabContext(timezone: string): Promise<string> {
     .flatMap((g) =>
       g.categories
         .filter((c) => !c.hidden && !c.deleted)
-        .map((c) => `${c.name}: ${toUSD(c.balance)} left`)
+        .map((c) => `${c.name}: ${toUSD(c.balance)} left, ${toUSD(-c.activity)} spent this month`)
     )
     .join('\n');
 
@@ -116,7 +116,7 @@ export async function fetchYnabContext(timezone: string): Promise<string> {
     .map((t) => `${t.date} | ${t.payee_name ?? 'Unknown'} | ${t.category_name ?? 'Uncategorized'} | ${toUSD(t.amount)}`)
     .join('\n');
 
-  return `Month: ${monthLabel}\n\nCATEGORY BALANCES:\n${categoryLines}\n\nRECENT TRANSACTIONS (last 14 days):\n${txLines || 'None'}`;
+  return `Month: ${monthLabel}\n\nCATEGORIES (remaining balance and spent so far this calendar month):\n${categoryLines}\n\nRECENT TRANSACTIONS (last 14 days):\n${txLines || 'None'}`;
 }
 
 export async function askClaude(
@@ -130,6 +130,7 @@ export async function askClaude(
     `Answer questions about their YNAB budget using the data below. ` +
     `Keep every reply under ${maxLength} characters — be direct and specific. ` +
     `Do not mention category IDs or technical terms. ` +
+    `For how-much-have-we-spent questions, use each category's "spent this month" total, not the transaction list. ` +
     `You can also change ${user.name}'s weekly digest settings with the ynab_update_config tool ` +
     `when they ask (e.g. "add Rent to my summary", "send it Fridays at 8am", "show budgeted instead"). ` +
     `After using it, confirm what changed in plain language. ` +
