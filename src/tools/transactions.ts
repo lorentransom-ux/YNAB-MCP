@@ -1,13 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ynabRead, cachedFetch } from '../ynab.js';
-import { toUSD, daysAgo } from '../utils.js';
+import { toUSD, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
 import type { TransactionDetail, HybridTransaction } from 'ynab';
-
-// When no since_date is given, bound the otherwise full-history fetch to this
-// many days back. An unbounded fetch serializes the entire transaction history
-// on every call; recent activity is what callers almost always want.
-const DEFAULT_SINCE_DAYS = 90;
 
 function mapTransaction(t: TransactionDetail | HybridTransaction) {
   return {
@@ -20,7 +15,7 @@ function mapTransaction(t: TransactionDetail | HybridTransaction) {
     memo: t.memo ?? null,
     cleared: t.cleared,
     approved: t.approved,
-    transfer_account_id: (t as TransactionDetail).transfer_account_id ?? null,
+    transfer_account_id: t.transfer_account_id ?? null,
   };
 }
 
