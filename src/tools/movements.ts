@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
-import { toUSD } from '../utils.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
+import { toUSD, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
 
 export function registerMovementTools(server: McpServer): void {
   server.registerTool(
@@ -10,23 +10,24 @@ export function registerMovementTools(server: McpServer): void {
       description:
         'Get transfers between accounts (money movements). ' +
         'These are transactions where funds move from one account to another. ' +
-        'Optional since_date filter.',
+        `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
+        'pass an explicit since_date to reach further back.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         since_date: z.string().optional().describe(
-          'Return only transfers on or after this date (YYYY-MM-DD).'
+          'Return only transfers on or after this date (YYYY-MM-DD). ' +
+          `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
         ),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
+        const sinceDate = args.since_date ?? daysAgo(DEFAULT_SINCE_DAYS);
         const response = await cachedFetch(
-          `transactions:${planId}:${args.since_date ?? ''}`,
-          () => api.transactions.getTransactions(planId, args.since_date)
+          `transactions:${planId}:${sinceDate}`,
+          () => api.transactions.getTransactions(planId, sinceDate)
         );
-        const transfers = response.data.transactions
+        return response.data.transactions
           .filter((t) => !t.deleted && t.transfer_account_id != null)
           .map((t) => ({
             id: t.id,
@@ -38,8 +39,6 @@ export function registerMovementTools(server: McpServer): void {
             memo: t.memo ?? null,
             cleared: t.cleared,
           }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(transfers) }] };
-      });
-    }
+      })
   );
 }

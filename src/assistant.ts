@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSD } from './utils.js';
+import { toUSD, daysAgoInTz } from './utils.js';
 import { applyConfigUpdate, type ConfigUpdate, type UserConfig } from './config.js';
 import { refreshUserSchedule } from './scheduler.js';
 
@@ -88,9 +88,9 @@ export async function fetchYnabContext(timezone: string): Promise<string> {
   const now = new Date();
   const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: timezone });
 
-  const sinceDate = new Date(now);
-  sinceDate.setDate(sinceDate.getDate() - 14);
-  const sinceDateStr = sinceDate.toISOString().slice(0, 10);
+  // Anchor the 14-day window to the user's local date so it doesn't drift by a
+  // day near midnight (the month label above is already timezone-aware).
+  const sinceDateStr = daysAgoInTz(14, timezone);
 
   const [catResponse, txResponse] = await Promise.all([
     cachedFetch(`categories:${budgetId}`, () => api.categories.getCategories(budgetId)),

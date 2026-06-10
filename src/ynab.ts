@@ -22,6 +22,19 @@ interface CacheEntry {
 
 const responseCache = new Map<string, CacheEntry>();
 
+// Drop expired entries so the cache doesn't accumulate dead keys over long
+// uptimes (each distinct since_date mints a new key). Runs on a coarse timer and
+// also lazily on read in cachedFetch.
+function pruneCache(): void {
+  const now = Date.now();
+  for (const [key, entry] of responseCache) {
+    if (entry.expiresAt <= now) responseCache.delete(key);
+  }
+}
+
+const cachePruneTimer = setInterval(pruneCache, 10 * 60 * 1000);
+cachePruneTimer.unref?.();
+
 // Short-TTL cache for read-only YNAB responses. Returns the in-flight promise
 // for an unexpired key (de-duping concurrent identical fetches) and evicts on
 // rejection so transient errors aren't cached. All YNAB tools are read-only, so
@@ -36,6 +49,7 @@ export function cachedFetch<T>(
   if (existing && existing.expiresAt > now) {
     return existing.value as Promise<T>;
   }
+  if (existing) responseCache.delete(key); // expired — evict before refetch
   const value = fn();
   responseCache.set(key, { value, expiresAt: now + ttlMs });
   value.catch(() => {
@@ -97,4 +111,22 @@ export async function withYnabErrorHandling<T extends McpContent>(
       isError: true,
     };
   }
+}
+
+// Wraps any serializable value as an MCP text-content result.
+export function jsonResult(data: unknown): { content: [{ type: 'text'; text: string }] } {
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+}
+
+// Shared handler shape for read-only YNAB tools: resolves the client and the
+// `plan_id` default ("last-used"), runs the caller's logic under YNAB error
+// handling, and serializes the returned value as an MCP text result. Collapses
+// the boilerplate every tool would otherwise repeat.
+export function ynabRead(
+  args: { plan_id?: string } | undefined,
+  build: (api: ynab.API, planId: string) => Promise<unknown>
+): Promise<McpContent> {
+  return withYnabErrorHandling(async () =>
+    jsonResult(await build(getYnabClient(), args?.plan_id ?? 'last-used'))
+  );
 }

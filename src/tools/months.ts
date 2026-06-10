@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
 import { toUSD, resolveMonth } from '../utils.js';
 import { mapCategory } from './categories.js';
 
@@ -15,15 +15,13 @@ export function registerMonthTools(server: McpServer): void {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         const response = await cachedFetch(
           `months:${planId}`,
           () => api.months.getPlanMonths(planId)
         );
-        const months = response.data.months.map((m) => ({
+        return response.data.months.map((m) => ({
           month: m.month,
           note: m.note ?? null,
           income: toUSD(m.income),
@@ -32,9 +30,7 @@ export function registerMonthTools(server: McpServer): void {
           to_be_budgeted: toUSD(m.to_be_budgeted),
           age_of_money: m.age_of_money ?? null,
         }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(months) }] };
-      });
-    }
+      })
   );
 
   server.registerTool(
@@ -50,10 +46,8 @@ export function registerMonthTools(server: McpServer): void {
         ),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         const resolvedMonth = resolveMonth(args.month);
         const response = await cachedFetch(
           `month:${planId}:${resolvedMonth}`,
@@ -61,7 +55,7 @@ export function registerMonthTools(server: McpServer): void {
         );
         const m = response.data.month;
 
-        const detail = {
+        return {
           month: m.month,
           note: m.note ?? null,
           income: toUSD(m.income),
@@ -73,8 +67,6 @@ export function registerMonthTools(server: McpServer): void {
             .filter((c) => !c.deleted)
             .map((c) => mapCategory(c)),
         };
-        return { content: [{ type: 'text' as const, text: JSON.stringify(detail) }] };
-      });
-    }
+      })
   );
 }

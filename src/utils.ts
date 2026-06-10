@@ -7,6 +7,29 @@ export function toUSD(milliunits: number | null | undefined): string {
   return val < 0 ? `-$${formatted}` : `$${formatted}`;
 }
 
+// When a transaction tool is called without since_date, bound the otherwise
+// full-history fetch to this many days back.
+export const DEFAULT_SINCE_DAYS = 90;
+
+// Returns the date `days` before now as YYYY-MM-DD (UTC). Used to bound otherwise
+// unfiltered transaction fetches to a recent window by default.
+export function daysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+// Like daysAgo, but anchored to the current calendar date in the given IANA
+// timezone rather than UTC, so a "last N days" window lines up with the user's
+// day near midnight instead of being off by one.
+export function daysAgoInTz(days: number, timeZone: string): string {
+  // en-CA renders as YYYY-MM-DD, which we treat as a UTC midnight to do date math.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone });
+  const d = new Date(`${today}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
 export function resolveMonth(month: string): string {
   if (month === 'current') {
     const now = new Date();
@@ -19,9 +42,9 @@ export function resolveMonth(month: string): string {
 
 function cadencePeriod(cadence: number | undefined, frequency: number | undefined): string {
   const freq = frequency ?? 1;
-  // Cadences 0, 1, 2, 13: period = cadence-type * frequency
-  if (cadence === 0) return freq === 1 ? 'month' : `${freq} months`; // "None" type, treat as monthly
-  if (cadence === 1) return freq === 1 ? 'month' : `${freq} months`;
+  // Cadences 0, 1, 2, 13: period = cadence-type * frequency.
+  // Cadence 0 is "None" — treated as monthly, same as cadence 1.
+  if (cadence === 0 || cadence === 1) return freq === 1 ? 'month' : `${freq} months`;
   if (cadence === 2) return freq === 1 ? 'week' : `${freq} weeks`;
   if (cadence === 13) return freq === 1 ? 'year' : `${freq} years`;
   // Cadences 3-12: fixed monthly multiples (cadence N = every (N-1) months)
