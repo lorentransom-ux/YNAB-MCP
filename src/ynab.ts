@@ -98,3 +98,21 @@ export async function withYnabErrorHandling<T extends McpContent>(
     };
   }
 }
+
+// Wraps any serializable value as an MCP text-content result.
+export function jsonResult(data: unknown): { content: [{ type: 'text'; text: string }] } {
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+}
+
+// Shared handler shape for read-only YNAB tools: resolves the client and the
+// `plan_id` default ("last-used"), runs the caller's logic under YNAB error
+// handling, and serializes the returned value as an MCP text result. Collapses
+// the boilerplate every tool would otherwise repeat.
+export function ynabRead(
+  args: { plan_id?: string } | undefined,
+  build: (api: ynab.API, planId: string) => Promise<unknown>
+): Promise<McpContent> {
+  return withYnabErrorHandling(async () =>
+    jsonResult(await build(getYnabClient(), args?.plan_id ?? 'last-used'))
+  );
+}

@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
 
 export function registerPayeeTools(server: McpServer): void {
   server.registerTool(
@@ -13,23 +13,19 @@ export function registerPayeeTools(server: McpServer): void {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         const response = await cachedFetch(
           `payees:${planId}`,
           () => api.payees.getPayees(planId)
         );
-        const payees = response.data.payees
+        return response.data.payees
           .filter((p) => !p.deleted)
           .map((p) => ({
             id: p.id,
             name: p.name,
             transfer_account_id: p.transfer_account_id ?? null,
           }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(payees) }] };
-      });
-    }
+      })
   );
 }

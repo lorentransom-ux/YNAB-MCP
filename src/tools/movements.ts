@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
 import { toUSD } from '../utils.js';
 
 export function registerMovementTools(server: McpServer): void {
@@ -18,15 +18,13 @@ export function registerMovementTools(server: McpServer): void {
         ),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         const response = await cachedFetch(
           `transactions:${planId}:${args.since_date ?? ''}`,
           () => api.transactions.getTransactions(planId, args.since_date)
         );
-        const transfers = response.data.transactions
+        return response.data.transactions
           .filter((t) => !t.deleted && t.transfer_account_id != null)
           .map((t) => ({
             id: t.id,
@@ -38,8 +36,6 @@ export function registerMovementTools(server: McpServer): void {
             memo: t.memo ?? null,
             cleared: t.cleared,
           }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(transfers) }] };
-      });
-    }
+      })
   );
 }

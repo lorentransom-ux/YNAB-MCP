@@ -7,6 +7,14 @@ export function toUSD(milliunits: number | null | undefined): string {
   return val < 0 ? `-$${formatted}` : `$${formatted}`;
 }
 
+// Returns the date `days` before now as YYYY-MM-DD. Used to bound otherwise
+// unfiltered transaction fetches to a recent window by default.
+export function daysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
 export function resolveMonth(month: string): string {
   if (month === 'current') {
     const now = new Date();

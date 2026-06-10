@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
 import { toUSD, buildGoalFields, resolveMonth } from '../utils.js';
 import type { Category } from 'ynab';
 
@@ -37,38 +37,30 @@ export function registerCategoryTools(server: McpServer): void {
         ),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
-
-        let categories: ReturnType<typeof mapCategory>[];
-
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         if (args.month) {
           const resolvedMonth = resolveMonth(args.month);
           const response = await cachedFetch(
             `month:${planId}:${resolvedMonth}`,
             () => api.months.getPlanMonth(planId, resolvedMonth)
           );
-          categories = response.data.month.categories
+          return response.data.month.categories
             .filter((c) => !c.deleted)
             .map((c) => mapCategory(c));
-        } else {
-          const response = await cachedFetch(
-            `categories:${planId}`,
-            () => api.categories.getCategories(planId)
-          );
-          categories = response.data.category_groups
-            .filter((g) => !g.hidden)
-            .flatMap((g) =>
-              g.categories
-                .filter((c) => !c.deleted)
-                .map((c) => mapCategory(c, g.name))
-            );
         }
 
-        return { content: [{ type: 'text' as const, text: JSON.stringify(categories) }] };
-      });
-    }
+        const response = await cachedFetch(
+          `categories:${planId}`,
+          () => api.categories.getCategories(planId)
+        );
+        return response.data.category_groups
+          .filter((g) => !g.hidden)
+          .flatMap((g) =>
+            g.categories
+              .filter((c) => !c.deleted)
+              .map((c) => mapCategory(c, g.name))
+          );
+      })
   );
 }

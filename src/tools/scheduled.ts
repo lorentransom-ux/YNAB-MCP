@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getYnabClient, withYnabErrorHandling, cachedFetch } from '../ynab.js';
+import { ynabRead, cachedFetch } from '../ynab.js';
 import { toUSD } from '../utils.js';
 
 export function registerScheduledTools(server: McpServer): void {
@@ -14,15 +14,13 @@ export function registerScheduledTools(server: McpServer): void {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
       },
     },
-    async (args) => {
-      return withYnabErrorHandling(async () => {
-        const api = getYnabClient();
-        const planId = args.plan_id ?? 'last-used';
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
         const response = await cachedFetch(
           `scheduled:${planId}`,
           () => api.scheduledTransactions.getScheduledTransactions(planId)
         );
-        const scheduled = response.data.scheduled_transactions
+        return response.data.scheduled_transactions
           .filter((t) => !t.deleted)
           .map((t) => ({
             id: t.id,
@@ -35,8 +33,6 @@ export function registerScheduledTools(server: McpServer): void {
             account_name: t.account_name,
             memo: t.memo ?? null,
           }));
-        return { content: [{ type: 'text' as const, text: JSON.stringify(scheduled) }] };
-      });
-    }
+      })
   );
 }
