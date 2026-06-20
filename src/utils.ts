@@ -7,6 +7,17 @@ export function toUSD(milliunits: number | null | undefined): string {
   return val < 0 ? `-$${formatted}` : `$${formatted}`;
 }
 
+// Telegram-facing money formatter. Negatives use accounting parentheses with a
+// red down-triangle marker (Telegram cannot render colored text, so the emoji
+// stands in for "red"). Positives render plainly, identical to toUSD. Used only
+// for digest, alert, and chat-context strings — NOT for MCP tool outputs, which
+// are structured data consumed by the desktop client and keep the plain "-$" form.
+export function toUSDDisplay(milliunits: number | null | undefined): string {
+  const val = milliunits ?? 0;
+  const abs = (Math.abs(val) / 1000).toFixed(2);
+  return val < 0 ? `🔻 ($${abs})` : `$${abs}`;
+}
+
 // When a transaction tool is called without since_date, bound the otherwise
 // full-history fetch to this many days back.
 export const DEFAULT_SINCE_DAYS = 90;

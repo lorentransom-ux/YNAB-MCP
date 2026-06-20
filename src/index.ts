@@ -7,6 +7,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { createMcpServer } from './server.js';
 import { oauthProvider, handleApproval } from './oauth.js';
 import { initScheduler } from './scheduler.js';
+import { initAlerts } from './alerts.js';
 import { seedConfigFromEnv } from './config.js';
 import { handleInboundTelegram } from './telegram-chat.js';
 import { isTelegramConfigured, registerTelegramWebhook } from './telegram.js';
@@ -136,6 +137,7 @@ app.listen(PORT, '0.0.0.0', () => {
   }
   seedConfigFromEnv();
   initScheduler();
+  initAlerts();
 });
 
 process.on('SIGTERM', async () => {

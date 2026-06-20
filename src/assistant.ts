@@ -1,7 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSD, daysAgoInTz } from './utils.js';
-import { applyConfigUpdate, type ConfigUpdate, type UserConfig } from './config.js';
+import { toUSDDisplay, daysAgoInTz } from './utils.js';
+import {
+  applyConfigUpdate,
+  addThreshold,
+  removeThreshold,
+  listThresholds,
+  type ConfigUpdate,
+  type Threshold,
+  type UserConfig,
+} from './config.js';
 import { refreshUserSchedule } from './scheduler.js';
 
 // Module-level client — instantiated once, reused for every inbound Telegram message.
@@ -50,6 +58,81 @@ const CONFIG_TOOL: Anthropic.Tool = {
   },
 };
 
+// Tool that lets a user manage proactive balance alerts by chatting with the bot.
+// Like CONFIG_TOOL it carries no "user" parameter — the executor binds it to the
+// authenticated caller, so a user can only manage their own alerts.
+const ALERTS_TOOL: Anthropic.Tool = {
+  name: 'ynab_manage_alerts',
+  description:
+    "Manage the user's proactive balance alerts. Use 'add' when they want to be notified " +
+    'when a category crosses an amount (e.g. "tell me when Coffee Shops gets to $15 or below" → ' +
+    "add Coffee Shops at 15 at_or_below). Use 'remove' to stop an alert, and 'list' to show " +
+    "current alerts. The user's current alerts are in the system prompt.",
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['add', 'remove', 'list'],
+        description: 'What to do: add or replace an alert, remove one, or list all alerts',
+      },
+      category: {
+        type: 'string',
+        description: 'YNAB category name the alert is for (required for add and remove)',
+      },
+      amount: {
+        type: 'number',
+        description: 'Dollar threshold to alert on, e.g. 15 (required for add)',
+      },
+      direction: {
+        type: 'string',
+        enum: ['at_or_below', 'at_or_above'],
+        description: 'Notify when the remaining balance is at_or_below (default) or at_or_above the amount',
+      },
+    },
+    required: ['action'],
+  },
+};
+
+interface AlertToolInput {
+  action?: 'add' | 'remove' | 'list';
+  category?: string;
+  amount?: number;
+  direction?: Threshold['direction'];
+}
+
+function formatThreshold(t: Threshold): string {
+  const verb = t.direction === 'at_or_above' ? '≥' : '≤';
+  return `${t.category} ${verb} $${t.amount.toFixed(2)}`;
+}
+
+// Executes the alerts tool for a fixed user. Returns a short result string fed
+// back to the model. No cron refresh needed — the alert job reloads config each run.
+function runAlertTool(userName: string, input: unknown): string {
+  const { action, category, amount, direction } = (input ?? {}) as AlertToolInput;
+
+  if (action === 'list') {
+    const alerts = listThresholds(userName);
+    if (alerts.length === 0) return 'No alerts are set.';
+    return `Current alerts: ${alerts.map(formatThreshold).join('; ')}.`;
+  }
+
+  if (action === 'add') {
+    if (!category) return 'A category is required to add an alert.';
+    if (amount === undefined || !Number.isFinite(amount)) return 'A dollar amount is required to add an alert.';
+    const result = addThreshold(userName, { category, amount, direction });
+    return 'error' in result ? result.error : `Set alert — ${result.change}.`;
+  }
+
+  if (action === 'remove') {
+    if (!category) return 'A category is required to remove an alert.';
+    const result = removeThreshold(userName, category);
+    return 'error' in result ? result.error : `${result.change}.`;
+  }
+
+  return 'Unknown alert action. Use add, remove, or list.';
+}
+
 // Executes the config tool for a fixed user, then refreshes their cron task if the
 // schedule changed. Returns a short result string fed back to the model.
 function runConfigTool(userName: string, input: unknown): string {
@@ -63,6 +146,9 @@ function runConfigTool(userName: string, input: unknown): string {
 
 function describeDigestSettings(user: UserConfig): string {
   const f = user.format;
+  const alerts = user.thresholds && user.thresholds.length > 0
+    ? user.thresholds.map(formatThreshold).join(', ')
+    : '(none)';
   return [
     'YOUR CURRENT DIGEST SETTINGS:',
     `- Categories shown: ${user.categories.join(', ') || '(none)'}`,
@@ -71,6 +157,7 @@ function describeDigestSettings(user: UserConfig): string {
     `- Amount shown: ${f.field}`,
     `- Goal progress: ${f.showGoalProgress ? 'on' : 'off'}`,
     `- Header note: ${f.headerNote || '(none)'}`,
+    `- Balance alerts: ${alerts}`,
   ].join('\n');
 }
 
@@ -105,7 +192,7 @@ export async function fetchYnabContext(timezone: string): Promise<string> {
     .flatMap((g) =>
       g.categories
         .filter((c) => !c.hidden && !c.deleted)
-        .map((c) => `${c.name}: ${toUSD(c.balance)} left, ${toUSD(-c.activity)} spent this month`)
+        .map((c) => `${c.name}: ${toUSDDisplay(c.balance)} left, ${toUSDDisplay(-c.activity)} spent this month`)
     )
     .join('\n');
 
@@ -113,7 +200,7 @@ export async function fetchYnabContext(timezone: string): Promise<string> {
     .filter((t) => !t.deleted)
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, 40)
-    .map((t) => `${t.date} | ${t.payee_name ?? 'Unknown'} | ${t.category_name ?? 'Uncategorized'} | ${toUSD(t.amount)}`)
+    .map((t) => `${t.date} | ${t.payee_name ?? 'Unknown'} | ${t.category_name ?? 'Uncategorized'} | ${toUSDDisplay(t.amount)}`)
     .join('\n');
 
   return `Month: ${monthLabel}\n\nCATEGORIES (remaining balance and spent so far this calendar month):\n${categoryLines}\n\nRECENT TRANSACTIONS (last 14 days):\n${txLines || 'None'}`;
@@ -131,9 +218,13 @@ export async function askClaude(
     `Keep every reply under ${maxLength} characters — be direct and specific. ` +
     `Do not mention category IDs or technical terms. ` +
     `For how-much-have-we-spent questions, use each category's "spent this month" total, not the transaction list. ` +
+    `Format negative dollar amounts as "🔻 ($15.00)" — a red down-triangle followed by the amount in ` +
+    `parentheses; format positive amounts plainly as "$15.00". ` +
     `You can also change ${user.name}'s weekly digest settings with the ynab_update_config tool ` +
     `when they ask (e.g. "add Rent to my summary", "send it Fridays at 8am", "show budgeted instead"). ` +
-    `After using it, confirm what changed in plain language. ` +
+    `Use the ynab_manage_alerts tool to set, remove, or list proactive balance alerts ` +
+    `(e.g. "notify me when Coffee Shops gets to $15 or below"). ` +
+    `After using either tool, confirm what changed in plain language. ` +
     `If you cannot answer from the data provided, say so briefly.\n\n` +
     `${describeDigestSettings(user)}\n\n${ynabContext}`;
 
@@ -146,7 +237,7 @@ export async function askClaude(
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 400,
       system,
-      tools: [CONFIG_TOOL],
+      tools: [CONFIG_TOOL, ALERTS_TOOL],
       messages,
     });
 
@@ -158,6 +249,12 @@ export async function askClaude(
             type: 'tool_result',
             tool_use_id: block.id,
             content: runConfigTool(user.name, block.input),
+          });
+        } else if (block.type === 'tool_use' && block.name === 'ynab_manage_alerts') {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: runAlertTool(user.name, block.input),
           });
         }
       }

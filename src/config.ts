@@ -8,6 +8,19 @@ export interface FormatOptions {
   headerNote: string;
 }
 
+// A proactive balance alert: notify the user when a category's remaining balance
+// crosses a limit. direction 'at_or_below' fires when balance <= amount (e.g.
+// "tell me when Coffee Shops hits $15 or below"); 'at_or_above' fires when
+// balance >= amount. `triggered` is internal dedupe state — once an alert fires
+// it stays true until the balance recovers past the threshold, so the user gets
+// one notification per crossing rather than one per check.
+export interface Threshold {
+  category: string;
+  amount: number;
+  direction: 'at_or_below' | 'at_or_above';
+  triggered?: boolean;
+}
+
 export interface UserConfig {
   name: string;
   schedule: string;
@@ -18,6 +31,8 @@ export interface UserConfig {
   // authorized for chat. Optional so a user can be configured before their chat ID is
   // known (discover it from the unrecognized-chat log line, then add it).
   telegramChatId?: number;
+  // Proactive balance alerts. Absent is treated as an empty list.
+  thresholds?: Threshold[];
 }
 
 export interface AppConfig {
@@ -122,6 +137,69 @@ export function applyConfigUpdate(
 
   saveConfig(config);
   return { changes };
+}
+
+// Adds or replaces (by case-insensitive category name) a balance alert for a user.
+// Resets dedupe state so the new threshold evaluates fresh on the next check.
+export function addThreshold(
+  userName: string,
+  threshold: { category: string; amount: number; direction?: Threshold['direction'] }
+): { change: string } | { error: string } {
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
+  if (!user) {
+    const names = config.users.map((u) => u.name).join(', ') || 'none';
+    return { error: `User "${userName}" not found. Configured users: ${names}` };
+  }
+  if (!Number.isFinite(threshold.amount)) {
+    return { error: `Invalid alert amount: "${threshold.amount}".` };
+  }
+  const direction = threshold.direction ?? 'at_or_below';
+  const entry: Threshold = { category: threshold.category, amount: threshold.amount, direction };
+
+  if (!user.thresholds) user.thresholds = [];
+  const idx = user.thresholds.findIndex((t) => t.category.toLowerCase() === threshold.category.toLowerCase());
+  if (idx >= 0) user.thresholds[idx] = entry;
+  else user.thresholds.push(entry);
+
+  saveConfig(config);
+  const verb = direction === 'at_or_below' ? 'at or below' : 'at or above';
+  return { change: `Alert when ${threshold.category} is ${verb} $${threshold.amount.toFixed(2)}` };
+}
+
+// Removes a user's alert for the given category (case-insensitive). Returns an
+// error string if no matching alert exists.
+export function removeThreshold(userName: string, category: string): { change: string } | { error: string } {
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
+  if (!user) {
+    const names = config.users.map((u) => u.name).join(', ') || 'none';
+    return { error: `User "${userName}" not found. Configured users: ${names}` };
+  }
+  const before = user.thresholds?.length ?? 0;
+  user.thresholds = (user.thresholds ?? []).filter((t) => t.category.toLowerCase() !== category.toLowerCase());
+  if (user.thresholds.length === before) {
+    return { error: `No alert found for "${category}".` };
+  }
+  saveConfig(config);
+  return { change: `Removed alert for ${category}` };
+}
+
+export function listThresholds(userName: string): Threshold[] {
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
+  return user?.thresholds ?? [];
+}
+
+// Persists the dedupe flag for a single alert. Called by the alert engine after
+// it sends (or clears) a notification so repeat checks don't re-notify.
+export function setThresholdState(userName: string, category: string, triggered: boolean): void {
+  const config = loadConfig();
+  const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
+  const threshold = user?.thresholds?.find((t) => t.category.toLowerCase() === category.toLowerCase());
+  if (!threshold || threshold.triggered === triggered) return;
+  threshold.triggered = triggered;
+  saveConfig(config);
 }
 
 export function seedConfigFromEnv(): void {

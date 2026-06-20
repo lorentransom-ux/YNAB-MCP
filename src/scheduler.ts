@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSD } from './utils.js';
+import { toUSDDisplay } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, type UserConfig } from './config.js';
 
@@ -37,7 +37,7 @@ async function buildMessage(user: UserConfig): Promise<string> {
   const lines = ordered.map((cat) => {
     const amount = field === 'budgeted' ? cat.budgeted : field === 'activity' ? cat.activity : cat.balance;
     const label = field === 'budgeted' ? 'budgeted' : field === 'activity' ? 'spent' : 'left';
-    let line = `${cat.name}: ${toUSD(amount)} ${label}`;
+    let line = `${cat.name}: ${toUSDDisplay(amount)} ${label}`;
     if (showGoalProgress && cat.goal_percentage_complete != null) {
       line += ` (${cat.goal_percentage_complete}% funded)`;
     }

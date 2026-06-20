@@ -108,6 +108,25 @@ YNAB: Updated — your digest now shows the budgeted amount per category.
 
 Adjustable by chat: which **categories** appear (add/remove), the **schedule** (cron) and **timezone**, the **amount shown** (remaining balance / budgeted / activity), **goal-progress** display, and a custom **header note**. Schedule and timezone changes take effect immediately. Changes are saved to `data/config.json`.
 
+### Proactive balance alerts
+
+Beyond the scheduled digest, each person can set **threshold alerts** — get a Telegram message when a category's remaining balance crosses a limit. Set them by chat (the `ynab_manage_alerts` tool, scoped to the chatting user):
+
+```
+You: Notify me when Coffee Shops gets to $15 or below
+YNAB: Set alert — Alert when Coffee Shops is at or below $15.00.
+
+You: List my alerts
+YNAB: Current alerts: Coffee Shops ≤ $15.00.
+
+You: Remove the Coffee Shops alert
+YNAB: Removed alert for Coffee Shops.
+```
+
+Balances are checked a few times a day (8am, 1pm, 7pm in your timezone). You get **one** message per crossing — an alert re-arms only after the balance recovers back past the threshold. Alerts are saved to `data/config.json` (attach a persistent volume so they survive redeploys).
+
+> **Note on red negatives:** in the digest and chat answers, negative amounts render as `🔻 ($15.00)` — parentheses are the accounting convention for negative, and the 🔻 stands in for "red" because Telegram messages can't display colored text.
+
 ### Setup
 
 1. **Create a bot:** message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot` → copy the token it gives you.
