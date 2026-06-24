@@ -4,6 +4,7 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { InvalidTokenError, InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
 interface PendingAuth {
   client: OAuthClientInformationFull;
@@ -166,7 +167,7 @@ export const oauthProvider: OAuthServerProvider = {
   ): Promise<string> {
     const entry = authCodes.get(authorizationCode);
     if (!entry || entry.expiresAt < Date.now() || entry.clientId !== client.client_id) {
-      throw new Error('Invalid or expired authorization code');
+      throw new InvalidGrantError('Invalid or expired authorization code');
     }
     return entry.challenge;
   },
@@ -177,7 +178,7 @@ export const oauthProvider: OAuthServerProvider = {
   ): Promise<OAuthTokens> {
     const entry = authCodes.get(authorizationCode);
     if (!entry || entry.expiresAt < Date.now() || entry.clientId !== client.client_id) {
-      throw new Error('Invalid or expired authorization code');
+      throw new InvalidGrantError('Invalid or expired authorization code');
     }
     authCodes.delete(authorizationCode);
 
@@ -208,7 +209,7 @@ export const oauthProvider: OAuthServerProvider = {
   ): Promise<OAuthTokens> {
     const entry = refreshTokens.get(refreshToken);
     if (!entry || entry.expiresAt < Date.now() || entry.clientId !== client.client_id) {
-      throw new Error('Invalid or expired refresh token');
+      throw new InvalidGrantError('Invalid or expired refresh token');
     }
 
     const accessToken = randomUUID();
@@ -230,7 +231,11 @@ export const oauthProvider: OAuthServerProvider = {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const entry = accessTokens.get(token);
     if (!entry || entry.expiresAt < Date.now()) {
-      throw new Error('Invalid or expired access token');
+      // Must be an InvalidTokenError (not a generic Error): the SDK's requireBearerAuth
+      // maps it to a 401 so the client re-runs OAuth, whereas a plain Error becomes a 500
+      // that clients retry forever. Tokens live only in memory, so every redeploy makes
+      // already-connected clients present a now-unknown token — they need the 401 to recover.
+      throw new InvalidTokenError('Invalid or expired access token');
     }
     return {
       token,
