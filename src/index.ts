@@ -8,7 +8,7 @@ import { createMcpServer } from './server.js';
 import { oauthProvider, handleApproval } from './oauth.js';
 import { initScheduler } from './scheduler.js';
 import { initAlerts } from './alerts.js';
-import { seedConfigFromEnv } from './config.js';
+import { initConfigStore, seedConfigFromEnv } from './config.js';
 import { handleInboundTelegram } from './telegram-chat.js';
 import { isTelegramConfigured, registerTelegramWebhook } from './telegram.js';
 
@@ -121,7 +121,7 @@ app.delete('/mcp', bearerAuth, async (req, res) => {
   await transports.get(sessionId)!.handleRequest(req, res);
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[YNAB-MCP] Server listening on port ${PORT}`);
   console.log(`[YNAB-MCP] Server URL: ${SERVER_URL}`);
   if (!process.env.YNAB_TOKEN) {
@@ -135,9 +135,17 @@ app.listen(PORT, '0.0.0.0', () => {
   } else {
     void registerTelegramWebhook(SERVER_URL);
   }
-  seedConfigFromEnv();
-  initScheduler();
-  initAlerts();
+  // Hydrate config from Postgres (migrating any legacy volume file) before the
+  // scheduler and alert engines read it.
+  try {
+    await initConfigStore();
+    await seedConfigFromEnv();
+    initScheduler();
+    initAlerts();
+  } catch (err) {
+    console.error('[YNAB-MCP] FATAL: failed to initialize config store:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  }
 });
 
 process.on('SIGTERM', async () => {

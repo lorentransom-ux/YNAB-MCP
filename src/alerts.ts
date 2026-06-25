@@ -57,13 +57,13 @@ export async function checkUserThresholds(userName: string): Promise<void> {
     if (met && !wasTriggered) {
       try {
         await sendTelegram(user.telegramChatId, alertMessage(cat.name, balanceMilli, threshold));
-        setThresholdState(user.name, threshold.category, true);
+        await setThresholdState(user.name, threshold.category, true);
       } catch {
         // sendTelegram already logged; leave triggered=false so we retry next run.
       }
     } else if (!met && wasTriggered) {
       // Balance recovered past the threshold — re-arm so the next crossing notifies.
-      setThresholdState(user.name, threshold.category, false);
+      await setThresholdState(user.name, threshold.category, false);
     }
   }
 }

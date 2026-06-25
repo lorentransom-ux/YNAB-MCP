@@ -106,7 +106,7 @@ You: Show budgeted amounts instead of what's left
 YNAB: Updated — your digest now shows the budgeted amount per category.
 ```
 
-Adjustable by chat: which **categories** appear (add/remove), the **schedule** (cron) and **timezone**, the **amount shown** (remaining balance / budgeted / activity), **goal-progress** display, and a custom **header note**. Schedule and timezone changes take effect immediately. Changes are saved to `data/config.json`.
+Adjustable by chat: which **categories** appear (add/remove), the **schedule** (cron) and **timezone**, the **amount shown** (remaining balance / budgeted / activity), **goal-progress** display, and a custom **header note**. Schedule and timezone changes take effect immediately. Changes are saved to Postgres.
 
 ### Proactive balance alerts
 
@@ -123,7 +123,7 @@ You: Remove the Coffee Shops alert
 YNAB: Removed alert for Coffee Shops.
 ```
 
-Balances are checked a few times a day (8am, 1pm, 7pm in your timezone). You get **one** message per crossing — an alert re-arms only after the balance recovers back past the threshold. Alerts are saved to `data/config.json` (attach a persistent volume so they survive redeploys).
+Balances are checked a few times a day (8am, 1pm, 7pm in your timezone). You get **one** message per crossing — an alert re-arms only after the balance recovers back past the threshold. Alerts are saved to Postgres, so they survive redeploys.
 
 > **Note on red negatives:** in the digest and chat answers, negative amounts render as `🔻 ($15.00)` — parentheses are the accounting convention for negative, and the 🔻 stands in for "red" because Telegram messages can't display colored text.
 
@@ -133,7 +133,7 @@ Balances are checked a few times a day (8am, 1pm, 7pm in your timezone). You get
 2. Add `ANTHROPIC_API_KEY` (from console.anthropic.com) and `TELEGRAM_BOT_TOKEN` to your Railway service's **Variables** tab. Optionally set `TELEGRAM_WEBHOOK_SECRET` to any random string for webhook verification.
 3. **Deploy.** On startup the server automatically registers its webhook with Telegram, pointing at `https://your-app.railway.app/telegram` (it uses your `SERVER_URL`, which must be HTTPS).
 4. **Find each chat ID:** have the user send any message to the bot. The server logs `[Telegram Chat] Ignored message from unrecognized chat: <id>` — that `<id>` is their numeric chat ID.
-5. Add that ID to the user via `USER1_TELEGRAM_ID` / `USER2_TELEGRAM_ID` (env var) or by editing `telegramChatId` in `data/config.json`. Redeploy/restart if you used the env var.
+5. Add that ID to the user via `USER1_TELEGRAM_ID` / `USER2_TELEGRAM_ID` (env var). Redeploy/restart so it's reconciled on startup.
 6. The user messages the bot again and gets budget answers, and their scheduled digest now delivers to that chat.
 
 Only chat IDs listed in a user's `telegramChatId` will receive replies or digests — messages from other chats are logged and ignored.
@@ -203,26 +203,43 @@ ngrok http 3000
 # Then message your bot and watch the logs.
 ```
 
-### Config persistence — Railway Volume
+### Config persistence — Postgres
 
-User config is seeded from your `USERx_*` env vars and saved to `data/config.json`. On Railway, this file lives on the service's ephemeral filesystem and **resets on redeploy** unless you attach a persistent volume:
+User config (categories, schedule, timezone, format, Telegram chat ID, and balance alerts) is seeded from your `USERx_*` env vars and persisted to a **Postgres database**. The server keeps the config in a single-row `app_config` table (stored as a JSONB blob) and connects over the network, so config **survives redeploys** without any volume coordination.
 
-1. Railway dashboard → your service → **Volumes** tab → **Add Volume**
-2. Mount path: `/data`
-3. Add env var: `CONFIG_PATH=/data/config.json`
+On Railway:
 
-Without a volume, the config file is recreated from your `USER1_*`/`USER2_*` env vars on each restart, so changes made by chatting with the bot are lost on every redeploy — attach a volume if you want those to persist.
+1. Railway dashboard → your project → **New → Database → Add PostgreSQL**.
+2. Open your app service → **Variables** → add a reference variable
+   `DATABASE_URL = ${{Postgres.DATABASE_PRIVATE_URL}}`. Use the **private** URL
+   (host `postgres.railway.internal`) — traffic stays on the internal network so
+   there are no egress fees, and no SSL config is needed. Both services must be in
+   the same project/environment.
+3. Deploy. On first boot the app creates the `app_config` table automatically.
+
+The server reads `process.env.DATABASE_URL`, so locally you can point it at any
+Postgres instance (e.g. `postgres://postgres:pw@localhost:5432/postgres`). When
+`DATABASE_URL` points at a non-private host (such as the public `*.rlwy.net`
+proxy or any remote host), TLS is enabled automatically.
+
+#### Migrating off the old Railway Volume
+
+Earlier versions stored config in `data/config.json` on a mounted volume. The
+first time the app boots with an empty database **and** the legacy file is still
+present at `CONFIG_PATH` (or `data/config.json`), it imports that file into
+Postgres automatically — so no digests or alerts are lost. After you confirm the
+data migrated, you can detach the Volume and remove the `CONFIG_PATH` variable.
 
 ### How env vars and chat edits interact
 
-The `USERx_*` env vars **seed the config once**, when `config.json` doesn't yet exist. After the file exists (e.g. on a persistent volume), startup does **not** re-read most of them — so editing `USER2_CATEGORIES`, `USER2_SCHEDULE`, etc. and redeploying has **no effect**. This is intentional: it preserves changes each user makes by chatting with the bot.
+The `USERx_*` env vars **seed the config once**, when the database has no config yet. After config exists in Postgres, startup does **not** re-read most of them — so editing `USER2_CATEGORIES`, `USER2_SCHEDULE`, etc. and redeploying has **no effect**. This is intentional: it preserves changes each user makes by chatting with the bot.
 
 So, once seeded:
 
-- **Categories, schedule, timezone, and format** are managed **by chat** ("add Rent to my summary", "send it Fridays at 8am") — instant, no redeploy. The config file is the source of truth.
+- **Categories, schedule, timezone, and format** are managed **by chat** ("add Rent to my summary", "send it Fridays at 8am") — instant, no redeploy. The database is the source of truth.
 - **`USERx_TELEGRAM_ID`** is the exception — it's reconciled from env on every startup, so you can add/change a chat ID via env var + redeploy at any time.
 
-To force a full reseed from env (discarding chat edits), point `CONFIG_PATH` at a fresh filename or detach the volume. Keeping the env vars roughly in sync with the live config is still worthwhile as a recovery baseline for that case.
+To force a full reseed from env (discarding chat edits), clear the `app_config` table (e.g. `DELETE FROM app_config;`). Keeping the env vars roughly in sync with the live config is still worthwhile as a recovery baseline for that case.
 
 ---
 

@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import cron from 'node-cron';
 import { normalizeCategoryName } from './utils.js';
+import { initDb, readConfigRow, writeConfigRow } from './db.js';
 
 export interface FormatOptions {
   field: 'balance' | 'budgeted' | 'activity';
@@ -46,32 +46,63 @@ const DEFAULT_FORMAT: FormatOptions = {
   headerNote: '',
 };
 
+// In-memory cache of the config, hydrated once at boot by initConfigStore().
+// The server runs as a single instance, so this cache is the source of truth for
+// synchronous reads; every write goes through to Postgres before returning.
+let cachedConfig: AppConfig = { users: [] };
+
+// Legacy on-disk path, used only for the one-time volume -> Postgres migration.
 export function getConfigPath(): string {
   if (process.env.CONFIG_PATH) return process.env.CONFIG_PATH;
   // Resolves to <project-root>/data/config.json whether running from src/ or dist/
   return new URL('../data/config.json', import.meta.url).pathname;
 }
 
-export function loadConfig(): AppConfig {
+// Reads the legacy config.json off the Railway volume (or local data/ dir) if it
+// exists. Returns null when there is nothing to migrate.
+function readLegacyFile(): AppConfig | null {
   const path = getConfigPath();
-  if (!existsSync(path)) return { users: [] };
+  if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as AppConfig;
     if (!Array.isArray(parsed?.users)) {
-      console.error('[Config] Config file missing "users" array — falling back to empty config');
-      return { users: [] };
+      console.error('[Config] Legacy config file missing "users" array — ignoring');
+      return null;
     }
     return parsed;
   } catch (err) {
-    console.error('[Config] Failed to parse config file:', err instanceof Error ? err.message : err);
-    return { users: [] };
+    console.error('[Config] Failed to parse legacy config file:', err instanceof Error ? err.message : err);
+    return null;
   }
 }
 
-export function saveConfig(config: AppConfig): void {
-  const path = getConfigPath();
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
+// Boot-time loader. Connects to Postgres, hydrates the cache, and performs a
+// one-time migration of any existing volume file so live data is not lost.
+export async function initConfigStore(): Promise<void> {
+  await initDb();
+  const row = await readConfigRow();
+  if (row && Array.isArray(row.users)) {
+    cachedConfig = row;
+    return;
+  }
+  // No config in the database yet — migrate the legacy volume file if present.
+  const legacy = readLegacyFile();
+  if (legacy) {
+    cachedConfig = legacy;
+    await writeConfigRow(cachedConfig);
+    console.log(`[Config] Migrated ${legacy.users.length} user(s) from legacy config file into Postgres`);
+    return;
+  }
+  cachedConfig = { users: [] };
+}
+
+export function loadConfig(): AppConfig {
+  return cachedConfig;
+}
+
+export async function saveConfig(config: AppConfig): Promise<void> {
+  cachedConfig = config;
+  await writeConfigRow(config);
 }
 
 export interface ConfigUpdate {
@@ -86,10 +117,10 @@ export interface ConfigUpdate {
 // Validates and persists a partial update to one user's digest settings, identified
 // by name. Returns the list of human-readable changes applied, or an error string.
 // Does not touch the cron scheduler — callers refresh the schedule if it changed.
-export function applyConfigUpdate(
+export async function applyConfigUpdate(
   userName: string,
   update: ConfigUpdate
-): { changes: string[] } | { error: string } {
+): Promise<{ changes: string[] } | { error: string }> {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
   if (!user) {
@@ -136,16 +167,16 @@ export function applyConfigUpdate(
 
   if (changes.length === 0) return { changes };
 
-  saveConfig(config);
+  await saveConfig(config);
   return { changes };
 }
 
 // Adds or replaces (by case-insensitive category name) a balance alert for a user.
 // Resets dedupe state so the new threshold evaluates fresh on the next check.
-export function addThreshold(
+export async function addThreshold(
   userName: string,
   threshold: { category: string; amount: number; direction?: Threshold['direction'] }
-): { change: string } | { error: string } {
+): Promise<{ change: string } | { error: string }> {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
   if (!user) {
@@ -164,14 +195,14 @@ export function addThreshold(
   if (idx >= 0) user.thresholds[idx] = entry;
   else user.thresholds.push(entry);
 
-  saveConfig(config);
+  await saveConfig(config);
   const verb = direction === 'at_or_below' ? 'at or below' : 'at or above';
   return { change: `Alert when ${threshold.category} is ${verb} $${threshold.amount.toFixed(2)}` };
 }
 
 // Removes a user's alert for the given category (case-insensitive). Returns an
 // error string if no matching alert exists.
-export function removeThreshold(userName: string, category: string): { change: string } | { error: string } {
+export async function removeThreshold(userName: string, category: string): Promise<{ change: string } | { error: string }> {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
   if (!user) {
@@ -184,7 +215,7 @@ export function removeThreshold(userName: string, category: string): { change: s
   if (user.thresholds.length === before) {
     return { error: `No alert found for "${category}".` };
   }
-  saveConfig(config);
+  await saveConfig(config);
   return { change: `Removed alert for ${category}` };
 }
 
@@ -196,19 +227,18 @@ export function listThresholds(userName: string): Threshold[] {
 
 // Persists the dedupe flag for a single alert. Called by the alert engine after
 // it sends (or clears) a notification so repeat checks don't re-notify.
-export function setThresholdState(userName: string, category: string, triggered: boolean): void {
+export async function setThresholdState(userName: string, category: string, triggered: boolean): Promise<void> {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
   const target = normalizeCategoryName(category);
   const threshold = user?.thresholds?.find((t) => normalizeCategoryName(t.category) === target);
   if (!threshold || threshold.triggered === triggered) return;
   threshold.triggered = triggered;
-  saveConfig(config);
+  await saveConfig(config);
 }
 
-export function seedConfigFromEnv(): void {
-  const path = getConfigPath();
-
+// Must run after initConfigStore() so the cache reflects the database state.
+export async function seedConfigFromEnv(): Promise<void> {
   // Parse the telegram chat IDs declared in env, keyed by lowercased user name.
   // Used both for initial seeding and for upserting onto an existing config.
   const envTelegramIds = new Map<string, number>();
@@ -223,8 +253,8 @@ export function seedConfigFromEnv(): void {
 
   // Config already exists — preserve all chat-made edits (categories, schedule,
   // format), but reconcile telegramChatId from env so setting USERx_TELEGRAM_ID
-  // takes effect on the next deploy without recreating the file.
-  if (existsSync(path)) {
+  // takes effect on the next deploy without recreating the config.
+  if (loadConfig().users.length > 0) {
     const config = loadConfig();
     let changed = false;
     for (const user of config.users) {
@@ -235,7 +265,7 @@ export function seedConfigFromEnv(): void {
         console.log(`[Config] Set telegramChatId for ${user.name} from env`);
       }
     }
-    if (changed) saveConfig(config);
+    if (changed) await saveConfig(config);
     return;
   }
 
@@ -265,7 +295,7 @@ export function seedConfigFromEnv(): void {
   }
 
   if (users.length > 0) {
-    saveConfig({ users });
+    await saveConfig({ users });
     console.log(`[Config] Seeded from env vars for: ${users.map((u) => u.name).join(', ')}`);
   }
 }

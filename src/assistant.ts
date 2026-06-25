@@ -166,13 +166,13 @@ async function runAlertTool(userName: string, input: unknown): Promise<string> {
     }
 
     // Store the canonical YNAB name so the cron engine matches it exactly.
-    const result = addThreshold(userName, { category: resolved.category.name, amount, direction });
+    const result = await addThreshold(userName, { category: resolved.category.name, amount, direction });
     return 'error' in result ? result.error : `Set alert — ${result.change}.`;
   }
 
   if (action === 'remove') {
     if (!category) return 'A category is required to remove an alert.';
-    const result = removeThreshold(userName, category);
+    const result = await removeThreshold(userName, category);
     return 'error' in result ? result.error : `${result.change}.`;
   }
 
@@ -181,9 +181,9 @@ async function runAlertTool(userName: string, input: unknown): Promise<string> {
 
 // Executes the config tool for a fixed user, then refreshes their cron task if the
 // schedule changed. Returns a short result string fed back to the model.
-function runConfigTool(userName: string, input: unknown): string {
+async function runConfigTool(userName: string, input: unknown): Promise<string> {
   const update = (input ?? {}) as ConfigUpdate;
-  const result = applyConfigUpdate(userName, update);
+  const result = await applyConfigUpdate(userName, update);
   if ('error' in result) return result.error;
   if (result.changes.length === 0) return 'No changes were specified.';
   if (update.schedule !== undefined || update.timezone !== undefined) refreshUserSchedule(userName);
@@ -296,7 +296,7 @@ export async function askClaude(
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: runConfigTool(user.name, block.input),
+            content: await runConfigTool(user.name, block.input),
           });
         } else if (block.type === 'tool_use' && block.name === 'ynab_manage_alerts') {
           toolResults.push({
