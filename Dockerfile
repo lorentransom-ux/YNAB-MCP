@@ -26,12 +26,6 @@ RUN npm ci --omit=dev
 # Compiled JavaScript from the build stage.
 COPY --from=builder /app/dist ./dist
 
-# Ensure the config directory exists for the no-volume case (config.ts persists
-# to ./data). In production a Railway Volume is mounted here at runtime. We run
-# as root — matching the previous Nixpacks build — so writes to the root-owned
-# mounted volume succeed.
-RUN mkdir -p data
-
 # Secrets (YNAB_TOKEN, ANTHROPIC_API_KEY, TELEGRAM_*, etc.) are intentionally NOT
 # declared as ARG/ENV here — Railway injects them as runtime environment
 # variables, so they never enter the build context or image layers.

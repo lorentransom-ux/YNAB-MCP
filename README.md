@@ -222,14 +222,6 @@ Postgres instance (e.g. `postgres://postgres:pw@localhost:5432/postgres`). When
 `DATABASE_URL` points at a non-private host (such as the public `*.rlwy.net`
 proxy or any remote host), TLS is enabled automatically.
 
-#### Migrating off the old Railway Volume
-
-Earlier versions stored config in `data/config.json` on a mounted volume. The
-first time the app boots with an empty database **and** the legacy file is still
-present at `CONFIG_PATH` (or `data/config.json`), it imports that file into
-Postgres automatically — so no digests or alerts are lost. After you confirm the
-data migrated, you can detach the Volume and remove the `CONFIG_PATH` variable.
-
 ### How env vars and chat edits interact
 
 The `USERx_*` env vars **seed the config once**, when the database has no config yet. After config exists in Postgres, startup does **not** re-read most of them — so editing `USER2_CATEGORIES`, `USER2_SCHEDULE`, etc. and redeploying has **no effect**. This is intentional: it preserves changes each user makes by chatting with the bot.

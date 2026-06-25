@@ -1,4 +1,3 @@
-import { readFileSync, existsSync } from 'node:fs';
 import cron from 'node-cron';
 import { normalizeCategoryName } from './utils.js';
 import { initDb, readConfigRow, writeConfigRow } from './db.js';
@@ -51,49 +50,11 @@ const DEFAULT_FORMAT: FormatOptions = {
 // synchronous reads; every write goes through to Postgres before returning.
 let cachedConfig: AppConfig = { users: [] };
 
-// Legacy on-disk path, used only for the one-time volume -> Postgres migration.
-export function getConfigPath(): string {
-  if (process.env.CONFIG_PATH) return process.env.CONFIG_PATH;
-  // Resolves to <project-root>/data/config.json whether running from src/ or dist/
-  return new URL('../data/config.json', import.meta.url).pathname;
-}
-
-// Reads the legacy config.json off the Railway volume (or local data/ dir) if it
-// exists. Returns null when there is nothing to migrate.
-function readLegacyFile(): AppConfig | null {
-  const path = getConfigPath();
-  if (!existsSync(path)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as AppConfig;
-    if (!Array.isArray(parsed?.users)) {
-      console.error('[Config] Legacy config file missing "users" array — ignoring');
-      return null;
-    }
-    return parsed;
-  } catch (err) {
-    console.error('[Config] Failed to parse legacy config file:', err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
-// Boot-time loader. Connects to Postgres, hydrates the cache, and performs a
-// one-time migration of any existing volume file so live data is not lost.
+// Boot-time loader. Connects to Postgres and hydrates the in-memory cache.
 export async function initConfigStore(): Promise<void> {
   await initDb();
   const row = await readConfigRow();
-  if (row && Array.isArray(row.users)) {
-    cachedConfig = row;
-    return;
-  }
-  // No config in the database yet — migrate the legacy volume file if present.
-  const legacy = readLegacyFile();
-  if (legacy) {
-    cachedConfig = legacy;
-    await writeConfigRow(cachedConfig);
-    console.log(`[Config] Migrated ${legacy.users.length} user(s) from legacy config file into Postgres`);
-    return;
-  }
-  cachedConfig = { users: [] };
+  cachedConfig = row && Array.isArray(row.users) ? row : { users: [] };
 }
 
 export function loadConfig(): AppConfig {

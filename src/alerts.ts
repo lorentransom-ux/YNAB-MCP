@@ -26,7 +26,7 @@ function alertMessage(categoryName: string, balanceMilli: number, threshold: Thr
 // Checks one user's thresholds against current YNAB balances and sends a Telegram
 // alert for each newly-crossed threshold. Uses per-threshold `triggered` dedupe so
 // the user gets one message per crossing, re-arming only after the balance recovers.
-export async function checkUserThresholds(userName: string): Promise<void> {
+async function checkUserThresholds(userName: string): Promise<void> {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
   if (!user) return;
