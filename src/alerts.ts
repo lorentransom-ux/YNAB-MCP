@@ -4,13 +4,15 @@ import { toUSDDisplay, findCategoryByName } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, setThresholdState, type Threshold } from './config.js';
 
-// Tracks active alert cron tasks by user name. One task per user, fired a few
-// times a day (in the user's timezone); each run reloads config so thresholds
+// Tracks active alert cron tasks by user name. One task per user, fired every
+// two hours (in the user's timezone); each run reloads config so thresholds
 // added via chat take effect without re-registering the task.
 const activeAlertTasks = new Map<string, ScheduledTask>();
 
-// Run alert checks at 8am, 1pm, and 7pm local time — "a few times a day".
-const ALERT_SCHEDULE = '0 8,13,19 * * *';
+// Run alert checks every two hours, every day, in local time. Per-threshold
+// `triggered` dedupe (see checkUserThresholds) ensures the extra frequency does
+// not produce repeat notifications for an already-reported low balance.
+const ALERT_SCHEDULE = '0 */2 * * *';
 
 function conditionMet(balanceDollars: number, threshold: Threshold): boolean {
   return threshold.direction === 'at_or_above'

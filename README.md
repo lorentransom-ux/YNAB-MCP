@@ -123,7 +123,7 @@ You: Remove the Coffee Shops alert
 YNAB: Removed alert for Coffee Shops.
 ```
 
-Balances are checked a few times a day (8am, 1pm, 7pm in your timezone). You get **one** message per crossing — an alert re-arms only after the balance recovers back past the threshold. Alerts are saved to Postgres, so they survive redeploys.
+Balances are checked every two hours, every day (in your timezone). You get **one** message per crossing — an alert re-arms only after the balance recovers back past the threshold. Alerts are saved to Postgres, so they survive redeploys.
 
 > **Note on red negatives:** in the digest and chat answers, negative amounts render as `🔻 ($15.00)` — parentheses are the accounting convention for negative, and the 🔻 stands in for "red" because Telegram messages can't display colored text.
 
