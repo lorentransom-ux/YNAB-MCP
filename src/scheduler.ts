@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay } from './utils.js';
+import { toUSDDisplay, findCategoryByName } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, type UserConfig } from './config.js';
 
@@ -20,14 +20,10 @@ async function buildMessage(user: UserConfig): Promise<string> {
   );
   const allCategories = response.data.category_groups.flatMap((g) => g.categories);
 
-  const byName = new Map<string, (typeof allCategories)[number]>();
-  for (const cat of allCategories) {
-    if (!cat.deleted) byName.set(cat.name.toLowerCase(), cat);
-  }
-
   const ordered: typeof allCategories = [];
   for (const name of user.categories) {
-    const cat = byName.get(name.toLowerCase());
+    // Emoji-tolerant: a stored "Coffee Shops" matches YNAB's "☕️ Coffee Shops".
+    const cat = findCategoryByName(allCategories, name);
     if (cat) ordered.push(cat);
     else console.warn(`[Scheduler] Category not found in YNAB for ${user.name}: "${name}"`);
   }

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import cron from 'node-cron';
+import { normalizeCategoryName } from './utils.js';
 
 export interface FormatOptions {
   field: 'balance' | 'budgeted' | 'activity';
@@ -158,7 +159,8 @@ export function addThreshold(
   const entry: Threshold = { category: threshold.category, amount: threshold.amount, direction };
 
   if (!user.thresholds) user.thresholds = [];
-  const idx = user.thresholds.findIndex((t) => t.category.toLowerCase() === threshold.category.toLowerCase());
+  const target = normalizeCategoryName(threshold.category);
+  const idx = user.thresholds.findIndex((t) => normalizeCategoryName(t.category) === target);
   if (idx >= 0) user.thresholds[idx] = entry;
   else user.thresholds.push(entry);
 
@@ -177,7 +179,8 @@ export function removeThreshold(userName: string, category: string): { change: s
     return { error: `User "${userName}" not found. Configured users: ${names}` };
   }
   const before = user.thresholds?.length ?? 0;
-  user.thresholds = (user.thresholds ?? []).filter((t) => t.category.toLowerCase() !== category.toLowerCase());
+  const target = normalizeCategoryName(category);
+  user.thresholds = (user.thresholds ?? []).filter((t) => normalizeCategoryName(t.category) !== target);
   if (user.thresholds.length === before) {
     return { error: `No alert found for "${category}".` };
   }
@@ -196,7 +199,8 @@ export function listThresholds(userName: string): Threshold[] {
 export function setThresholdState(userName: string, category: string, triggered: boolean): void {
   const config = loadConfig();
   const user = config.users.find((u) => u.name.toLowerCase() === userName.toLowerCase());
-  const threshold = user?.thresholds?.find((t) => t.category.toLowerCase() === category.toLowerCase());
+  const target = normalizeCategoryName(category);
+  const threshold = user?.thresholds?.find((t) => normalizeCategoryName(t.category) === target);
   if (!threshold || threshold.triggered === triggered) return;
   threshold.triggered = triggered;
   saveConfig(config);

@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay } from './utils.js';
+import { toUSDDisplay, findCategoryByName } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, setThresholdState, type Threshold } from './config.js';
 
@@ -42,13 +42,9 @@ export async function checkUserThresholds(userName: string): Promise<void> {
   );
   const allCategories = response.data.category_groups.flatMap((g) => g.categories);
 
-  const byName = new Map<string, (typeof allCategories)[number]>();
-  for (const cat of allCategories) {
-    if (!cat.deleted) byName.set(cat.name.toLowerCase(), cat);
-  }
-
   for (const threshold of user.thresholds) {
-    const cat = byName.get(threshold.category.toLowerCase());
+    // Emoji-tolerant: a stored "Coffee Shops" matches YNAB's "☕️ Coffee Shops".
+    const cat = findCategoryByName(allCategories, threshold.category);
     if (!cat) {
       console.warn(`[Alerts] Category not found in YNAB for ${user.name}: "${threshold.category}"`);
       continue;
