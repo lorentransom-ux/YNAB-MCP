@@ -18,6 +18,36 @@ export function toUSDDisplay(milliunits: number | null | undefined): string {
   return val < 0 ? `🔻 ($${abs})` : `$${abs}`;
 }
 
+// Normalizes a YNAB category name for tolerant matching: strips emoji, variation
+// selectors, and zero-width joiners, collapses whitespace, and lowercases. So a
+// stored alert/digest name like "Coffee Shops" matches the real YNAB category
+// "☕️ Coffee Shops". Returns '' for an emoji-only name (no usable text to match).
+export function normalizeCategoryName(name: string): string {
+  return name
+    .normalize('NFKC')
+    .replace(/[\p{Extended_Pictographic}\u200D\uFE0F]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Finds a category by name, preferring an exact (case-insensitive) match and
+// falling back to the emoji-tolerant normalized form. Exact-first keeps existing
+// behavior and limits the chance of two distinct categories colliding. Skips
+// deleted categories. Shared by the alert engine and the digest scheduler.
+export function findCategoryByName<T extends { name: string; deleted?: boolean }>(
+  categories: T[],
+  name: string
+): T | undefined {
+  const live = categories.filter((c) => !c.deleted);
+  const target = name.toLowerCase();
+  const exact = live.find((c) => c.name.toLowerCase() === target);
+  if (exact) return exact;
+  const norm = normalizeCategoryName(name);
+  if (!norm) return undefined;
+  return live.find((c) => normalizeCategoryName(c.name) === norm);
+}
+
 // When a transaction tool is called without since_date, bound the otherwise
 // full-history fetch to this many days back.
 export const DEFAULT_SINCE_DAYS = 90;
