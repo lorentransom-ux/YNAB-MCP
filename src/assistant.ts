@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay, daysAgoInTz } from './utils.js';
+import { toUSDDisplay, daysAgoInTz, normalizeCategoryName, findCategoryByName } from './utils.js';
 import {
   applyConfigUpdate,
   addThreshold,
@@ -106,9 +106,40 @@ function formatThreshold(t: Threshold): string {
   return `${t.category} ${verb} $${t.amount.toFixed(2)}`;
 }
 
+// Resolves a user-supplied category name against the live YNAB categories. On a hit
+// returns the canonical category (so we store the real name, e.g. "☕️ Coffee Shops",
+// which the cron alert engine then matches exactly). On a miss returns a few close
+// suggestions so the caller can tell the user instead of saving an alert that would
+// never fire because the category name was mistyped.
+async function resolveCategory(
+  name: string
+): Promise<{ category: { name: string } } | { suggestions: string[] }> {
+  const api = getYnabClient();
+  const budgetId = process.env.YNAB_BUDGET_ID ?? 'last-used';
+  const response = await cachedFetch(
+    `categories:${budgetId}`,
+    () => api.categories.getCategories(budgetId)
+  );
+  const allCategories = response.data.category_groups.flatMap((g) => g.categories);
+
+  const match = findCategoryByName(allCategories, name);
+  if (match) return { category: match };
+
+  // No match — offer up to 5 visible categories that share a word with the query.
+  const words = normalizeCategoryName(name).split(' ').filter(Boolean);
+  const suggestions = allCategories
+    .filter((c) => !c.deleted && !c.hidden)
+    .map((c) => ({ name: c.name, overlap: words.filter((w) => normalizeCategoryName(c.name).includes(w)).length }))
+    .filter((c) => c.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, 5)
+    .map((c) => c.name);
+  return { suggestions };
+}
+
 // Executes the alerts tool for a fixed user. Returns a short result string fed
 // back to the model. No cron refresh needed — the alert job reloads config each run.
-function runAlertTool(userName: string, input: unknown): string {
+async function runAlertTool(userName: string, input: unknown): Promise<string> {
   const { action, category, amount, direction } = (input ?? {}) as AlertToolInput;
 
   if (action === 'list') {
@@ -120,7 +151,22 @@ function runAlertTool(userName: string, input: unknown): string {
   if (action === 'add') {
     if (!category) return 'A category is required to add an alert.';
     if (amount === undefined || !Number.isFinite(amount)) return 'A dollar amount is required to add an alert.';
-    const result = addThreshold(userName, { category, amount, direction });
+
+    // Verify the category exists in YNAB before saving, so a mistyped name surfaces
+    // immediately rather than as a silently-missing notification later.
+    let resolved: { category: { name: string } } | { suggestions: string[] };
+    try {
+      resolved = await resolveCategory(category);
+    } catch {
+      return `I couldn't reach YNAB to verify "${category}" just now, so I did not set the alert. Please try again in a moment.`;
+    }
+    if ('suggestions' in resolved) {
+      const hint = resolved.suggestions.length > 0 ? ` Did you mean: ${resolved.suggestions.join(', ')}?` : '';
+      return `I couldn't find a YNAB category named "${category}", so I did NOT set an alert.${hint}`;
+    }
+
+    // Store the canonical YNAB name so the cron engine matches it exactly.
+    const result = addThreshold(userName, { category: resolved.category.name, amount, direction });
     return 'error' in result ? result.error : `Set alert — ${result.change}.`;
   }
 
@@ -225,6 +271,8 @@ export async function askClaude(
     `Use the ynab_manage_alerts tool to set, remove, or list proactive balance alerts ` +
     `(e.g. "notify me when Coffee Shops gets to $15 or below"). ` +
     `After using either tool, confirm what changed in plain language. ` +
+    `If a tool result says it could not find the category or did not set the alert, ` +
+    `relay that to the user verbatim — do NOT claim the alert was set, and pass along any suggested category names. ` +
     `If you cannot answer from the data provided, say so briefly.\n\n` +
     `${describeDigestSettings(user)}\n\n${ynabContext}`;
 
@@ -254,7 +302,7 @@ export async function askClaude(
           toolResults.push({
             type: 'tool_result',
             tool_use_id: block.id,
-            content: runAlertTool(user.name, block.input),
+            content: await runAlertTool(user.name, block.input),
           });
         }
       }
