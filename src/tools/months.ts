@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { ynabRead, cachedFetch } from '../ynab.js';
-import { toUSD, resolveMonth } from '../utils.js';
+import { ynabRead, ynabWrite, cachedFetch } from '../ynab.js';
+import { toUSD, toMilliunits, resolveMonth } from '../utils.js';
 import { mapCategory } from './categories.js';
 
 export function registerMonthTools(server: McpServer): void {
@@ -67,6 +67,37 @@ export function registerMonthTools(server: McpServer): void {
             .filter((c) => !c.deleted)
             .map((c) => mapCategory(c)),
         };
+      })
+  );
+
+  server.registerTool(
+    'ynab_set_category_budget',
+    {
+      description:
+        'Set the budgeted (assigned) amount for a category in a specific month. ' +
+        'This sets the absolute assigned amount, not a delta. ' +
+        'To move money between categories, call this twice: decrease one category and ' +
+        'increase the other (read current amounts with ynab_get_month_detail first). ' +
+        'Returns the updated category with its new budgeted amount and balance.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        month: z.string().describe('Month in YYYY-MM-01 format, or "current" for the current month.'),
+        category_id: z.string().describe('The category to assign money to (from ynab_get_categories).'),
+        budgeted: z.number().describe(
+          'The total amount to assign for the month, in dollars (e.g. 250 or 250.50). ' +
+          'Replaces the current assigned amount.'
+        ),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const response = await api.categories.updateMonthCategory(
+          planId,
+          resolveMonth(args.month),
+          args.category_id,
+          { category: { budgeted: toMilliunits(args.budgeted) } }
+        );
+        return mapCategory(response.data.category);
       })
   );
 }

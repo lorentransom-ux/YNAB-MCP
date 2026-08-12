@@ -1,5 +1,10 @@
 import type { Category } from 'ynab';
 
+// Inverse of toUSD for write tools: dollars (e.g. -12.34) → milliunits (-12340).
+export function toMilliunits(dollars: number): number {
+  return Math.round(dollars * 1000);
+}
+
 export function toUSD(milliunits: number | null | undefined): string {
   const val = milliunits ?? 0;
   const abs = Math.abs(val / 1000);

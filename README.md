@@ -4,9 +4,9 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-12 read-only budget tools, all accessible via Claude chat.
+23 budget tools — 12 read, 11 write — all accessible via Claude chat.
 
-**Budget tools:**
+**Read tools:**
 
 | Tool | Description |
 |------|-------------|
@@ -22,6 +22,24 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_movements` | Account-to-account transfers |
+
+**Write tools:**
+
+| Tool | Description |
+|------|-------------|
+| `ynab_create_transaction` | Add a new transaction to an account |
+| `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction |
+| `ynab_delete_transaction` | Delete a transaction |
+| `ynab_import_transactions` | Trigger import from linked bank accounts |
+| `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
+| `ynab_update_category` | Rename a category or edit its note/group |
+| `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction |
+| `ynab_update_scheduled_transaction` | Edit a scheduled transaction |
+| `ynab_delete_scheduled_transaction` | Delete a scheduled transaction |
+| `ynab_rename_payee` | Rename a payee |
+| `ynab_create_account` | Create an unlinked (manually tracked) account |
+
+Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. The YNAB API cannot create or delete budgets, delete accounts, or edit goals/targets, so those remain app-only.
 
 Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, can ask plain-English budget questions any time, and can adjust their own digest settings just by chatting — no phone number, carrier registration, or 10DLC required.
 

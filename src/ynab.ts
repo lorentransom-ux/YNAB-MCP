@@ -37,8 +37,8 @@ cachePruneTimer.unref?.();
 
 // Short-TTL cache for read-only YNAB responses. Returns the in-flight promise
 // for an unexpired key (de-duping concurrent identical fetches) and evicts on
-// rejection so transient errors aren't cached. All YNAB tools are read-only, so
-// there are no writes that would require invalidation.
+// rejection so transient errors aren't cached. Write tools flush the whole
+// cache on success (see ynabWrite) so reads never serve pre-write data.
 export function cachedFetch<T>(
   key: string,
   fn: () => Promise<T>,
@@ -129,4 +129,20 @@ export function ynabRead(
   return withYnabErrorHandling(async () =>
     jsonResult(await build(getYnabClient(), args?.plan_id ?? 'last-used'))
   );
+}
+
+// Write-tool counterpart of ynabRead: same client/plan_id resolution and error
+// handling, but flushes the read cache after the write succeeds. The whole
+// cache is cleared (rather than per-key invalidation) because a single write
+// can affect many read views — a transaction touches account balances, month
+// activity, and category balances at once — and entries expire in 45s anyway.
+export function ynabWrite(
+  args: { plan_id?: string } | undefined,
+  build: (api: ynab.API, planId: string) => Promise<unknown>
+): Promise<McpContent> {
+  return withYnabErrorHandling(async () => {
+    const result = await build(getYnabClient(), args?.plan_id ?? 'last-used');
+    responseCache.clear();
+    return jsonResult(result);
+  });
 }

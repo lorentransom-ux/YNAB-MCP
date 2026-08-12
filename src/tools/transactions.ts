@@ -1,8 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { ynabRead, cachedFetch } from '../ynab.js';
-import { toUSD, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
-import type { TransactionDetail, HybridTransaction } from 'ynab';
+import { ynabRead, ynabWrite, cachedFetch } from '../ynab.js';
+import { toUSD, toMilliunits, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
+import type { TransactionDetail, HybridTransaction, ExistingTransaction } from 'ynab';
+
+// Shared enums for transaction write tools, matching the YNAB API's values.
+const clearedSchema = z.enum(['cleared', 'uncleared', 'reconciled']);
+const flagColorSchema = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'purple']);
+
+const AMOUNT_DESC =
+  'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
 
 function mapTransaction(t: TransactionDetail | HybridTransaction) {
   return {
@@ -130,6 +137,131 @@ export function registerTransactionTools(server: McpServer): void {
         return response.data.transactions
           .filter((t) => !t.deleted)
           .map(mapTransaction);
+      })
+  );
+
+  server.registerTool(
+    'ynab_create_transaction',
+    {
+      description:
+        'Create a new transaction in an account. ' +
+        'Requires account_id (from ynab_get_accounts) and either payee_name or payee_id. ' +
+        'A payee_name that does not exist yet is created automatically. ' +
+        'Returns the created transaction.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        account_id: z.string().describe('The account the transaction belongs to.'),
+        date: z.string().describe('Transaction date (YYYY-MM-DD). Cannot be in the future.'),
+        amount: z.number().describe(AMOUNT_DESC),
+        payee_id: z.string().optional().describe('Existing payee ID. Prefer payee_name unless the ID is known.'),
+        payee_name: z.string().optional().describe('Payee name. Matched to an existing payee or created.'),
+        category_id: z.string().optional().describe('Category ID (from ynab_get_categories). Omit to leave uncategorized.'),
+        memo: z.string().optional().describe('Optional memo.'),
+        cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
+        approved: z.boolean().optional().describe('Whether the transaction is approved. Defaults to true for API-created transactions.'),
+        flag_color: flagColorSchema.optional().describe('Optional flag color.'),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const response = await api.transactions.createTransaction(planId, {
+          transaction: {
+            account_id: args.account_id,
+            date: args.date,
+            amount: toMilliunits(args.amount),
+            ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
+            ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
+            ...(args.category_id !== undefined && { category_id: args.category_id }),
+            ...(args.memo !== undefined && { memo: args.memo }),
+            ...(args.cleared !== undefined && { cleared: args.cleared }),
+            ...(args.approved !== undefined && { approved: args.approved }),
+            ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
+          },
+        });
+        const created = response.data.transaction;
+        return created ? mapTransaction(created) : { created: true };
+      })
+  );
+
+  server.registerTool(
+    'ynab_update_transaction',
+    {
+      description:
+        'Update an existing transaction. Only the provided fields are changed. ' +
+        'Use this to recategorize, edit amounts/memos, approve, or mark transactions cleared. ' +
+        'Requires transaction_id (from ynab_get_transactions). Returns the updated transaction.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        transaction_id: z.string().describe('The transaction to update.'),
+        account_id: z.string().optional().describe('Move the transaction to a different account.'),
+        date: z.string().optional().describe('New date (YYYY-MM-DD).'),
+        amount: z.number().optional().describe(AMOUNT_DESC),
+        payee_id: z.string().optional().describe('New payee ID.'),
+        payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
+        category_id: z.string().optional().describe('New category ID (from ynab_get_categories).'),
+        memo: z.string().optional().describe('New memo.'),
+        cleared: clearedSchema.optional().describe('New cleared status.'),
+        approved: z.boolean().optional().describe('Set true to approve an unapproved transaction.'),
+        flag_color: flagColorSchema.optional().describe('New flag color.'),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const transaction: ExistingTransaction = {
+          ...(args.account_id !== undefined && { account_id: args.account_id }),
+          ...(args.date !== undefined && { date: args.date }),
+          ...(args.amount !== undefined && { amount: toMilliunits(args.amount) }),
+          ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
+          ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
+          ...(args.category_id !== undefined && { category_id: args.category_id }),
+          ...(args.memo !== undefined && { memo: args.memo }),
+          ...(args.cleared !== undefined && { cleared: args.cleared }),
+          ...(args.approved !== undefined && { approved: args.approved }),
+          ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
+        };
+        const response = await api.transactions.updateTransaction(
+          planId,
+          args.transaction_id,
+          { transaction }
+        );
+        return mapTransaction(response.data.transaction);
+      })
+  );
+
+  server.registerTool(
+    'ynab_delete_transaction',
+    {
+      description:
+        'Delete a transaction. Requires transaction_id (from ynab_get_transactions). ' +
+        'Returns the deleted transaction for confirmation.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        transaction_id: z.string().describe('The transaction to delete.'),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const response = await api.transactions.deleteTransaction(planId, args.transaction_id);
+        return { deleted: true, ...mapTransaction(response.data.transaction) };
+      })
+  );
+
+  server.registerTool(
+    'ynab_import_transactions',
+    {
+      description:
+        'Trigger an import of transactions from all linked (bank-connected) accounts. ' +
+        'Equivalent to pressing "Import" in the YNAB app. ' +
+        'Returns the IDs of newly imported transactions.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const response = await api.transactions.importTransactions(planId);
+        const ids = response.data.transaction_ids;
+        return { imported_count: ids.length, transaction_ids: ids };
       })
   );
 }
