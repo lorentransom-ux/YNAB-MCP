@@ -34,8 +34,15 @@ export async function sendTelegram(chatId: number | string, text: string): Promi
   }
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Self-configuring webhook registration, called once at startup. Points Telegram
 // at <serverUrl>/telegram. Telegram requires an HTTPS serverUrl.
+//
+// Telegram rate-limits setWebhook, and a redeploy restarts the container fast
+// enough that back-to-back registrations can hit a 429. That's routine, not a
+// real failure, so honor Telegram's retry_after and try again — an error is
+// only logged once registration has genuinely failed.
 export async function registerTelegramWebhook(serverUrl: string): Promise<void> {
   if (!botToken) return;
   const webhookUrl = `${serverUrl.replace(/\/$/, '')}/telegram`;
@@ -43,21 +50,44 @@ export async function registerTelegramWebhook(serverUrl: string): Promise<void> 
     console.warn(`[Telegram] Skipping webhook registration — SERVER_URL is not HTTPS: ${serverUrl}`);
     return;
   }
-  try {
-    const body: Record<string, unknown> = { url: webhookUrl };
-    if (webhookSecret) body.secret_token = webhookSecret;
-    const res = await fetch(apiUrl('setWebhook'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
+  const body: Record<string, unknown> = { url: webhookUrl };
+  if (webhookSecret) body.secret_token = webhookSecret;
+
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch(apiUrl('setWebhook'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        console.log(`[Telegram] Webhook registered at ${webhookUrl}`);
+        return;
+      }
       const detail = await res.text().catch(() => '');
+      if (res.status === 429 && attempt < maxAttempts) {
+        let retryAfter = 5;
+        try {
+          const parsed = JSON.parse(detail) as { parameters?: { retry_after?: number } };
+          retryAfter = Math.min(parsed.parameters?.retry_after ?? 5, 60);
+        } catch {
+          // unparseable body — fall back to the 5s default
+        }
+        console.log(
+          `[Telegram] setWebhook rate-limited; retrying in ${retryAfter}s (attempt ${attempt}/${maxAttempts})`
+        );
+        await sleep(retryAfter * 1000);
+        continue;
+      }
       console.error(`[Telegram] setWebhook failed (${res.status}): ${detail}`);
       return;
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        await sleep(2000 * attempt);
+        continue;
+      }
+      console.error('[Telegram] Webhook registration error:', err instanceof Error ? err.message : err);
     }
-    console.log(`[Telegram] Webhook registered at ${webhookUrl}`);
-  } catch (err) {
-    console.error('[Telegram] Webhook registration error:', err instanceof Error ? err.message : err);
   }
 }
