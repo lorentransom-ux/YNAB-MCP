@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ynabRead, ynabWrite, cachedFetch } from '../ynab.js';
 import { toUSD, toMilliunits, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
-import type { TransactionDetail, HybridTransaction, ExistingTransaction } from 'ynab';
+import type { TransactionDetail, HybridTransaction, ExistingTransaction, Payee } from 'ynab';
 
 // Shared enums for transaction write tools, matching the YNAB API's values.
 const clearedSchema = z.enum(['cleared', 'uncleared', 'reconciled']);
@@ -24,6 +24,15 @@ function mapTransaction(t: TransactionDetail | HybridTransaction) {
     approved: t.approved,
     transfer_account_id: t.transfer_account_id ?? null,
   };
+}
+
+function isTransferName(name: string | undefined): boolean {
+  return typeof name === 'string' && /^transfer\s*:/i.test(name.trim());
+}
+
+async function loadPayees(api: { payees: { getPayees: (planId: string) => Promise<{ data: { payees: Payee[] } }> } }, planId: string) {
+  const response = await cachedFetch(`payees:${planId}`, () => api.payees.getPayees(planId));
+  return response.data.payees.filter((p) => !p.deleted);
 }
 
 export function registerTransactionTools(server: McpServer): void {
@@ -146,16 +155,26 @@ export function registerTransactionTools(server: McpServer): void {
       description:
         'Create a new transaction in an account. ' +
         'Requires account_id (from ynab_get_accounts) and either payee_name or payee_id. ' +
-        'A payee_name that does not exist yet is created automatically. ' +
+        'A payee_name that does not exist yet is created automatically, except transfers. ' +
+        'To record an account-to-account transfer: account_id is the source, amount is a ' +
+        'negative outflow in dollars, payee_id is the destination account\'s transfer_payee_id ' +
+        '(from ynab_get_accounts), and omit category_id. Do not invent a Transfer payee. ' +
+        'A payee_name like "Transfer : Checking" is resolved to that existing transfer payee. ' +
         'Returns the created transaction.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-        account_id: z.string().describe('The account the transaction belongs to.'),
+        account_id: z.string().describe('The account the transaction belongs to. For a transfer, this is the source account.'),
         date: z.string().describe('Transaction date (YYYY-MM-DD). Cannot be in the future.'),
         amount: z.number().describe(AMOUNT_DESC),
-        payee_id: z.string().optional().describe('Existing payee ID. Prefer payee_name unless the ID is known.'),
-        payee_name: z.string().optional().describe('Payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('Category ID (from ynab_get_categories). Omit to leave uncategorized.'),
+        payee_id: z.string().optional().describe(
+          'Existing payee ID. For a transfer, use the destination account\'s transfer_payee_id from ynab_get_accounts. Prefer this over payee_name unless the ID is unknown.'
+        ),
+        payee_name: z.string().optional().describe(
+          'Payee name. Matched to an existing payee or created. Names like "Transfer : AccountName" are resolved to the existing transfer payee and never create a duplicate.'
+        ),
+        category_id: z.string().optional().describe(
+          'Category ID (from ynab_get_categories). Omit for transfers and to leave a transaction uncategorized.'
+        ),
         memo: z.string().optional().describe('Optional memo.'),
         cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
         approved: z.boolean().optional().describe('Whether the transaction is approved. Defaults to true for API-created transactions.'),
@@ -164,14 +183,44 @@ export function registerTransactionTools(server: McpServer): void {
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
+        let payeeId = args.payee_id;
+        let payeeName = args.payee_name;
+        let categoryId = args.category_id;
+
+        if (isTransferName(payeeName) || payeeId) {
+          const payees = await loadPayees(api, planId);
+          if (isTransferName(payeeName) && !payeeId) {
+            const target = payeeName!.trim().toLowerCase();
+            const match = payees.find(
+              (p) => p.transfer_account_id && p.name.toLowerCase() === target
+            );
+            if (!match) {
+              throw new Error(
+                `No existing transfer payee named "${payeeName}". ` +
+                  'Use the destination account\'s transfer_payee_id from ynab_get_accounts. ' +
+                  'Do not create a new payee for transfers.'
+              );
+            }
+            payeeId = match.id;
+            payeeName = undefined;
+            categoryId = undefined;
+          } else if (payeeId) {
+            const match = payees.find((p) => p.id === payeeId);
+            if (match?.transfer_account_id) {
+              payeeName = undefined;
+              categoryId = undefined;
+            }
+          }
+        }
+
         const response = await api.transactions.createTransaction(planId, {
           transaction: {
             account_id: args.account_id,
             date: args.date,
             amount: toMilliunits(args.amount),
-            ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
-            ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
-            ...(args.category_id !== undefined && { category_id: args.category_id }),
+            ...(payeeId !== undefined && { payee_id: payeeId }),
+            ...(payeeName !== undefined && { payee_name: payeeName }),
+            ...(categoryId !== undefined && { category_id: categoryId }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.cleared !== undefined && { cleared: args.cleared }),
             ...(args.approved !== undefined && { approved: args.approved }),
