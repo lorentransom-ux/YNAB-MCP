@@ -10,6 +10,7 @@ export function registerMovementTools(server: McpServer): void {
       description:
         'Get transfers between accounts (money movements). ' +
         'These are transactions where funds move from one account to another. ' +
+        'Includes flag_color and flag_name. ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
       inputSchema: {
@@ -38,6 +39,8 @@ export function registerMovementTools(server: McpServer): void {
             transfer_account_id: t.transfer_account_id,
             memo: t.memo ?? null,
             cleared: t.cleared,
+            flag_color: t.flag_color ?? null,
+            flag_name: (t as { flag_name?: string | null }).flag_name ?? null,
           }));
       })
   );

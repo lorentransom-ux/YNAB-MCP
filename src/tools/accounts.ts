@@ -7,7 +7,10 @@ export function registerAccountTools(server: McpServer): void {
   server.registerTool(
     'ynab_get_accounts',
     {
-      description: 'Get all accounts with current balances, types, and on-budget status.',
+      description:
+        'Get all accounts with current balances, types, and on-budget status. ' +
+        'Each account includes transfer_payee_id: pass that as payee_id on ynab_create_transaction ' +
+        '(and omit category_id) to record a real account-to-account transfer.',
       inputSchema: {
         plan_id: z.string().optional().describe(
           'Budget/plan ID. Defaults to "last-used" (the most recently used budget).'
@@ -31,6 +34,7 @@ export function registerAccountTools(server: McpServer): void {
             balance: toUSD(a.balance),
             cleared_balance: toUSD(a.cleared_balance),
             uncleared_balance: toUSD(a.uncleared_balance),
+            transfer_payee_id: a.transfer_payee_id ?? null,
           }));
       })
   );
@@ -41,7 +45,7 @@ export function registerAccountTools(server: McpServer): void {
       description:
         'Create a new unlinked (manually tracked) account with a starting balance. ' +
         'The YNAB API cannot create bank-linked accounts — those must be set up in the YNAB app. ' +
-        'Returns the created account.',
+        'Returns the created account, including transfer_payee_id for later transfers.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().describe('The account name.'),
@@ -69,6 +73,7 @@ export function registerAccountTools(server: McpServer): void {
           type: a.type,
           on_budget: a.on_budget,
           balance: toUSD(a.balance),
+          transfer_payee_id: a.transfer_payee_id ?? null,
         };
       })
   );
