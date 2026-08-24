@@ -11,23 +11,23 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | Tool | Description |
 |------|-------------|
 | `ynab_get_plans` | List all budgets with IDs and names |
-| `ynab_get_accounts` | All accounts with balances and types |
+| `ynab_get_accounts` | All accounts with balances, types, and `transfer_payee_id` (needed for transfers) |
 | `ynab_get_categories` | Category groups and categories with goal info |
 | `ynab_get_months` | All budget months with income/budgeted/activity totals |
 | `ynab_get_month_detail` | Full category breakdown for a specific month |
-| `ynab_get_transactions` | All transactions with optional date filters |
-| `ynab_get_transactions_by_account` | Transactions for a specific account |
-| `ynab_get_transactions_by_category` | Transactions for a specific category |
-| `ynab_get_transactions_by_payee` | Transactions for a specific payee |
+| `ynab_get_transactions` | All transactions with optional date filters; includes `flag_color` and `flag_name` |
+| `ynab_get_transactions_by_account` | Transactions for a specific account (includes flags) |
+| `ynab_get_transactions_by_category` | Transactions for a specific category (includes flags) |
+| `ynab_get_transactions_by_payee` | Transactions for a specific payee (includes flags) |
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
-| `ynab_get_money_movements` | Account-to-account transfers |
+| `ynab_get_money_movements` | Account-to-account transfers (includes flags) |
 
 **Write tools:**
 
 | Tool | Description |
 |------|-------------|
-| `ynab_create_transaction` | Add a new transaction to an account |
+| `ynab_create_transaction` | Add a transaction, or a linked transfer via `transfer_payee_id` |
 | `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction |
 | `ynab_delete_transaction` | Delete a transaction |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
@@ -40,6 +40,19 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_create_account` | Create an unlinked (manually tracked) account |
 
 Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. The YNAB API cannot create or delete budgets, delete accounts, or edit goals/targets, so those remain app-only.
+
+### Account-to-account transfers
+
+YNAB records a transfer as a transaction whose payee is the destination account's transfer payee (not a new payee you create).
+
+1. Call `ynab_get_accounts` and take the **source** account `id` plus the **destination** account `transfer_payee_id`.
+2. Call `ynab_create_transaction` with `account_id` = source, `amount` as a negative outflow in dollars, `payee_id` = destination `transfer_payee_id`, and **omit** `category_id`.
+
+A `payee_name` like `Transfer : Checking` is resolved to that existing transfer payee. Do not invent a duplicate non-transfer payee with that name.
+
+### Transaction flags
+
+List/get responses (`ynab_get_transactions`, by account/payee/category, and `ynab_get_money_movements`) include `flag_color` (`red` / `orange` / `yellow` / `green` / `blue` / `purple`) and `flag_name` (the custom name on that flag, if any). `ynab_create_transaction` and `ynab_update_transaction` can set `flag_color`; a later get returns both fields. Merchant order-history URLs are not in the YNAB REST API and are not exposed here.
 
 Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, can ask plain-English budget questions any time, and can adjust their own digest settings just by chatting — no phone number, carrier registration, or 10DLC required.
 
@@ -302,6 +315,8 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 - **Auth**: OAuth 2.0 with dynamic client registration and PKCE. Claude.ai registers itself automatically; you approve access once in your browser.
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
+- **Transfers**: Accounts include `transfer_payee_id`; create a linked transfer with that id as `payee_id` and no `category_id`
+- **Flags**: Transaction reads pass through `flag_color` and `flag_name`
 - **Scheduler**: Optional background worker (`node-cron`) that fires on configured cron schedules, fetches YNAB category balances, and sends digests via Telegram. Initializes at server startup; silently no-ops if `TELEGRAM_BOT_TOKEN` is absent.
 
 ---
