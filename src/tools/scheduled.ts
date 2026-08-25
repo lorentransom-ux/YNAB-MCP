@@ -158,10 +158,7 @@ export function registerScheduledTools(server: McpServer): void {
             ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
             ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
             ...(args.category_id !== undefined && { category_id: args.category_id }),
-            ...(subtransactions !== undefined && {
-              category_id: null,
-              subtransactions,
-            }),
+            ...(subtransactions !== undefined && { subtransactions }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
           },
