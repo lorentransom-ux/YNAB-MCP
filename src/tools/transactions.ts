@@ -24,7 +24,8 @@ type TransactionWithFlagName = (TransactionDetail | HybridTransaction) & {
 };
 
 function mapSubtransactions(t: TransactionDetail | HybridTransaction) {
-  const subs = Array.isArray(t.subtransactions) ? t.subtransactions : [];
+  const detail = t as TransactionDetail;
+  const subs = Array.isArray(detail.subtransactions) ? detail.subtransactions : [];
   const live = subs.filter((s) => !s.deleted);
   if (!live.length) return undefined;
   return live.map((s) => ({
@@ -311,10 +312,7 @@ export function registerTransactionTools(server: McpServer): void {
             ...(payeeId !== undefined && { payee_id: payeeId }),
             ...(payeeName !== undefined && { payee_name: payeeName }),
             ...(categoryId !== undefined && { category_id: categoryId }),
-            ...(subtransactions !== undefined && {
-              category_id: null,
-              subtransactions,
-            }),
+            ...(subtransactions !== undefined && { subtransactions }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.cleared !== undefined && { cleared: args.cleared }),
             ...(args.approved !== undefined && { approved: args.approved }),
