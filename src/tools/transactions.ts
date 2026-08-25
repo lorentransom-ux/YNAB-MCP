@@ -11,12 +11,35 @@ const flagColorSchema = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'pur
 const AMOUNT_DESC =
   'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
 
+const splitLineSchema = z.object({
+  amount: z.number().describe(AMOUNT_DESC),
+  category_id: z.string().describe(
+    'Category ID for this split line (from ynab_get_categories).'
+  ),
+  memo: z.string().optional().describe('Optional memo on this split line.'),
+});
+
 type TransactionWithFlagName = (TransactionDetail | HybridTransaction) & {
   flag_name?: string | null;
 };
 
+function mapSubtransactions(t: TransactionDetail | HybridTransaction) {
+  const subs = Array.isArray(t.subtransactions) ? t.subtransactions : [];
+  const live = subs.filter((s) => !s.deleted);
+  if (!live.length) return undefined;
+  return live.map((s) => ({
+    id: s.id,
+    amount: toUSD(s.amount),
+    payee_name: s.payee_name ?? null,
+    category_id: s.category_id ?? null,
+    category_name: s.category_name ?? null,
+    memo: s.memo ?? null,
+  }));
+}
+
 function mapTransaction(t: TransactionDetail | HybridTransaction) {
   const tx = t as TransactionWithFlagName;
+  const subtransactions = mapSubtransactions(t);
   return {
     id: t.id,
     date: t.date,
@@ -30,11 +53,35 @@ function mapTransaction(t: TransactionDetail | HybridTransaction) {
     transfer_account_id: t.transfer_account_id ?? null,
     flag_color: t.flag_color ?? null,
     flag_name: tx.flag_name ?? null,
+    ...(subtransactions ? { subtransactions } : {}),
   };
 }
 
 function isTransferName(name: string | undefined): boolean {
   return typeof name === 'string' && /^transfer\s*:/i.test(name.trim());
+}
+
+function buildSplitLines(
+  parentAmount: number,
+  splits: { amount: number; category_id: string; memo?: string }[]
+): { amount: number; category_id: string; memo?: string }[] {
+  if (splits.length < 2) {
+    throw new Error('A split needs at least two lines, each with amount and category_id.');
+  }
+  const parentMilli = toMilliunits(parentAmount);
+  const lines = splits.map((s) => ({
+    amount: toMilliunits(s.amount),
+    category_id: s.category_id,
+    ...(s.memo !== undefined && { memo: s.memo }),
+  }));
+  const sum = lines.reduce((acc, s) => acc + (s.amount ?? 0), 0);
+  if (sum !== parentMilli) {
+    throw new Error(
+      `Split line amounts must add up to the transaction amount (${parentAmount}). ` +
+        `They currently add up to ${sum / 1000}.`
+    );
+  }
+  return lines;
 }
 
 async function loadPayees(api: { payees: { getPayees: (planId: string) => Promise<{ data: { payees: Payee[] } }> } }, planId: string) {
@@ -50,6 +97,7 @@ export function registerTransactionTools(server: McpServer): void {
         'Get all transactions with optional date filters. ' +
         'Returns payee name, category name, account name, amount, date, memo, cleared status, ' +
         'flag_color, and flag_name (custom name on that flag, if any). ' +
+        'Split transactions include a subtransactions array (each line has amount and category). ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
       inputSchema: {
@@ -82,7 +130,8 @@ export function registerTransactionTools(server: McpServer): void {
       description:
         'Get transactions filtered to a specific account. ' +
         'Requires account_id. If you only have an account name, call ynab_get_accounts first ' +
-        'to look up the account ID from the account name. Includes flag_color and flag_name.',
+        'to look up the account ID from the account name. Includes flag_color, flag_name, ' +
+        'and subtransactions on splits.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account ID to filter transactions by.'),
@@ -109,7 +158,8 @@ export function registerTransactionTools(server: McpServer): void {
       description:
         'Get transactions filtered to a specific category. ' +
         'Requires category_id. If you only have a category name, call ynab_get_categories first ' +
-        'to look up the category ID from the category name. Includes flag_color and flag_name.',
+        'to look up the category ID from the category name. Includes flag_color and flag_name. ' +
+        'Split transactions that include this category are returned with their subtransactions.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         category_id: z.string().describe('The category ID to filter transactions by.'),
@@ -136,7 +186,8 @@ export function registerTransactionTools(server: McpServer): void {
       description:
         'Get transactions filtered to a specific payee. ' +
         'Requires payee_id. If you only have a payee name, call ynab_get_payees first ' +
-        'to look up the payee ID from the payee name. Includes flag_color and flag_name.',
+        'to look up the payee ID from the payee name. Includes flag_color, flag_name, ' +
+        'and subtransactions on splits.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         payee_id: z.string().describe('The payee ID to filter transactions by.'),
@@ -168,7 +219,12 @@ export function registerTransactionTools(server: McpServer): void {
         'negative outflow in dollars, payee_id is the destination account\'s transfer_payee_id ' +
         '(from ynab_get_accounts), and omit category_id. Do not invent a Transfer payee. ' +
         'A payee_name like "Transfer : Checking" is resolved to that existing transfer payee. ' +
-        'Returns the created transaction including flag_color and flag_name.',
+        'To split across categories (groceries + supplies, etc.): omit category_id and pass ' +
+        'subtransactions. Each line needs amount (dollars, same sign as the parent) and ' +
+        'category_id. Line amounts must add up to amount. The YNAB API cannot add splits to ' +
+        'an already-imported bank transaction; split those in the YNAB app, or create a new ' +
+        'split here. Returns the created transaction including flag_color, flag_name, and ' +
+        'subtransactions when split.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account the transaction belongs to. For a transfer, this is the source account.'),
@@ -181,7 +237,10 @@ export function registerTransactionTools(server: McpServer): void {
           'Payee name. Matched to an existing payee or created. Names like "Transfer : AccountName" are resolved to the existing transfer payee and never create a duplicate.'
         ),
         category_id: z.string().optional().describe(
-          'Category ID (from ynab_get_categories). Omit for transfers and to leave a transaction uncategorized.'
+          'Category ID (from ynab_get_categories). Omit for transfers, splits, and to leave a transaction uncategorized.'
+        ),
+        subtransactions: z.array(splitLineSchema).optional().describe(
+          'Split lines for a multi-category transaction. Omit category_id on the parent. At least two lines; amounts must sum to amount.'
         ),
         memo: z.string().optional().describe('Optional memo.'),
         cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
@@ -194,6 +253,13 @@ export function registerTransactionTools(server: McpServer): void {
         let payeeId = args.payee_id;
         let payeeName = args.payee_name;
         let categoryId = args.category_id;
+        const splits = args.subtransactions;
+
+        if (splits?.length && categoryId) {
+          throw new Error(
+            'Omit category_id when splitting. Each split line has its own category_id.'
+          );
+        }
 
         if (isTransferName(payeeName) || payeeId) {
           const payees = await loadPayees(api, planId);
@@ -221,6 +287,22 @@ export function registerTransactionTools(server: McpServer): void {
           }
         }
 
+        if (splits?.length && categoryId === undefined && payeeId) {
+          // Transfers cannot also be category splits.
+          const payees = await loadPayees(api, planId);
+          const match = payees.find((p) => p.id === payeeId);
+          if (match?.transfer_account_id) {
+            throw new Error(
+              'A transfer cannot also be split across categories. ' +
+                'Create a regular (non-transfer) transaction with subtransactions instead.'
+            );
+          }
+        }
+
+        const subtransactions = splits?.length
+          ? buildSplitLines(args.amount, splits)
+          : undefined;
+
         const response = await api.transactions.createTransaction(planId, {
           transaction: {
             account_id: args.account_id,
@@ -229,6 +311,10 @@ export function registerTransactionTools(server: McpServer): void {
             ...(payeeId !== undefined && { payee_id: payeeId }),
             ...(payeeName !== undefined && { payee_name: payeeName }),
             ...(categoryId !== undefined && { category_id: categoryId }),
+            ...(subtransactions !== undefined && {
+              category_id: null,
+              subtransactions,
+            }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.cleared !== undefined && { cleared: args.cleared }),
             ...(args.approved !== undefined && { approved: args.approved }),
@@ -246,7 +332,11 @@ export function registerTransactionTools(server: McpServer): void {
       description:
         'Update an existing transaction. Only the provided fields are changed. ' +
         'Use this to recategorize, edit amounts/memos, approve, or mark transactions cleared. ' +
-        'Requires transaction_id (from ynab_get_transactions). Returns the updated transaction including flag_color and flag_name.',
+        'Requires transaction_id (from ynab_get_transactions). ' +
+        'The YNAB API cannot add or change splits on an existing transaction. ' +
+        'To record a multi-category purchase, create a new split with ynab_create_transaction ' +
+        '(or split the import in the YNAB app). Returns the updated transaction including ' +
+        'flag_color, flag_name, and subtransactions when already split.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction to update.'),
@@ -255,7 +345,7 @@ export function registerTransactionTools(server: McpServer): void {
         amount: z.number().optional().describe(AMOUNT_DESC),
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('New category ID (from ynab_get_categories).'),
+        category_id: z.string().optional().describe('New category ID (from ynab_get_categories). Cannot change the category of an existing split.'),
         memo: z.string().optional().describe('New memo.'),
         cleared: clearedSchema.optional().describe('New cleared status.'),
         approved: z.boolean().optional().describe('Set true to approve an unapproved transaction.'),

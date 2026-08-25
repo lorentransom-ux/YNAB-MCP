@@ -15,7 +15,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_categories` | Category groups and categories with goal info |
 | `ynab_get_months` | All budget months with income/budgeted/activity totals |
 | `ynab_get_month_detail` | Full category breakdown for a specific month |
-| `ynab_get_transactions` | All transactions with optional date filters; includes `flag_color` and `flag_name` |
+| `ynab_get_transactions` | All transactions with optional date filters; includes `flag_color`, `flag_name`, and `subtransactions` on splits |
 | `ynab_get_transactions_by_account` | Transactions for a specific account (includes flags) |
 | `ynab_get_transactions_by_category` | Transactions for a specific category (includes flags) |
 | `ynab_get_transactions_by_payee` | Transactions for a specific payee (includes flags) |
@@ -27,19 +27,32 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 | Tool | Description |
 |------|-------------|
-| `ynab_create_transaction` | Add a transaction, or a linked transfer via `transfer_payee_id` |
-| `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction |
+| `ynab_create_transaction` | Add a transaction, a linked transfer via `transfer_payee_id`, or a multi-category split via `subtransactions` |
+| `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction (cannot add splits to an existing one) |
 | `ynab_delete_transaction` | Delete a transaction |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
 | `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
 | `ynab_update_category` | Rename a category or edit its note/group |
-| `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction |
+| `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction, including splits |
 | `ynab_update_scheduled_transaction` | Edit a scheduled transaction |
 | `ynab_delete_scheduled_transaction` | Delete a scheduled transaction |
 | `ynab_rename_payee` | Rename a payee |
 | `ynab_create_account` | Create an unlinked (manually tracked) account |
 
-Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. The YNAB API cannot create or delete budgets, delete accounts, or edit goals/targets, so those remain app-only.
+Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. The YNAB API cannot create or delete budgets, delete accounts, or edit goals/targets, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction — those still have to be split in the YNAB app.
+
+### Split transactions (multiple categories)
+
+To create a new split (for example a Rouse's trip that is part groceries, part household supplies):
+
+1. Look up category IDs with `ynab_get_categories`.
+2. Call `ynab_create_transaction` with the total `amount`, **omit** `category_id`, and pass `subtransactions`: at least two lines, each with `amount` (same sign as the parent) and `category_id`. Line amounts must add up to `amount`. Optional per-line `memo`.
+
+Example: a $47.20 outflow, $32.10 groceries and $15.10 supplies — `amount: -47.20` and two lines `-32.10` / `-15.10`.
+
+Reads (`ynab_get_transactions` and the filtered variants) return a `subtransactions` array on split transactions. `ynab_create_scheduled_transaction` accepts the same `subtransactions` shape.
+
+The public API will not convert an already-imported bank transaction into a split. For those, split in the YNAB app (or delete and recreate, which drops the bank match).
 
 ### Account-to-account transfers
 
@@ -316,6 +329,7 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
 - **Transfers**: Accounts include `transfer_payee_id`; create a linked transfer with that id as `payee_id` and no `category_id`
+- **Splits**: Create with `subtransactions` (omit parent `category_id`); reads return split lines. Existing imports cannot be split via the API
 - **Flags**: Transaction reads pass through `flag_color` and `flag_name`
 - **Scheduler**: Optional background worker (`node-cron`) that fires on configured cron schedules, fetches YNAB category balances, and sends digests via Telegram. Initializes at server startup; silently no-ops if `TELEGRAM_BOT_TOKEN` is absent.
 

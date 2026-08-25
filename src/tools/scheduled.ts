@@ -22,7 +22,33 @@ const frequencySchema = z.enum([
 
 const flagColorSchema = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'purple']);
 
+const AMOUNT_DESC =
+  'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
+
+const splitLineSchema = z.object({
+  amount: z.number().describe(AMOUNT_DESC),
+  category_id: z.string().describe(
+    'Category ID for this split line (from ynab_get_categories).'
+  ),
+  memo: z.string().optional().describe('Optional memo on this split line.'),
+});
+
+function mapSubtransactions(t: ScheduledTransactionDetail) {
+  const subs = Array.isArray(t.subtransactions) ? t.subtransactions : [];
+  const live = subs.filter((s) => !s.deleted);
+  if (!live.length) return undefined;
+  return live.map((s) => ({
+    id: s.id,
+    amount: toUSD(s.amount),
+    payee_name: s.payee_name ?? null,
+    category_id: s.category_id ?? null,
+    category_name: s.category_name ?? null,
+    memo: s.memo ?? null,
+  }));
+}
+
 function mapScheduled(t: ScheduledTransactionDetail) {
+  const subtransactions = mapSubtransactions(t);
   return {
     id: t.id,
     date_first: t.date_first,
@@ -33,7 +59,31 @@ function mapScheduled(t: ScheduledTransactionDetail) {
     category_name: t.category_name ?? null,
     account_name: t.account_name,
     memo: t.memo ?? null,
+    ...(subtransactions ? { subtransactions } : {}),
   };
+}
+
+function buildSplitLines(
+  parentAmount: number,
+  splits: { amount: number; category_id: string; memo?: string }[]
+): { amount: number; category_id: string; memo?: string }[] {
+  if (splits.length < 2) {
+    throw new Error('A split needs at least two lines, each with amount and category_id.');
+  }
+  const parentMilli = toMilliunits(parentAmount);
+  const lines = splits.map((s) => ({
+    amount: toMilliunits(s.amount),
+    category_id: s.category_id,
+    ...(s.memo !== undefined && { memo: s.memo }),
+  }));
+  const sum = lines.reduce((acc, s) => acc + (s.amount ?? 0), 0);
+  if (sum !== parentMilli) {
+    throw new Error(
+      `Split line amounts must add up to the transaction amount (${parentAmount}). ` +
+        `They currently add up to ${sum / 1000}.`
+    );
+  }
+  return lines;
 }
 
 export function registerScheduledTools(server: McpServer): void {
@@ -42,7 +92,8 @@ export function registerScheduledTools(server: McpServer): void {
     {
       description:
         'Get all upcoming and recurring scheduled transactions. ' +
-        'Returns frequency, next occurrence date, amount, payee name, and category name.',
+        'Returns frequency, next occurrence date, amount, payee name, and category name. ' +
+        'Split scheduled transactions include a subtransactions array.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
       },
@@ -65,26 +116,39 @@ export function registerScheduledTools(server: McpServer): void {
       description:
         'Create a recurring or one-time future (scheduled) transaction. ' +
         'Requires account_id (from ynab_get_accounts) and a future date. ' +
+        'To split across categories, omit category_id and pass subtransactions ' +
+        '(at least two lines; amounts must sum to amount). ' +
         'Returns the created scheduled transaction.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account the scheduled transaction belongs to.'),
         date: z.string().describe('First occurrence date (YYYY-MM-DD). Must be in the future.'),
-        amount: z.number().describe(
-          'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.'
-        ),
+        amount: z.number().describe(AMOUNT_DESC),
         frequency: frequencySchema.optional().describe(
           'How often the transaction repeats. "never" (the default) schedules a single future transaction.'
         ),
         payee_id: z.string().optional().describe('Existing payee ID. Prefer payee_name unless the ID is known.'),
         payee_name: z.string().optional().describe('Payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('Category ID (from ynab_get_categories). Omit to leave uncategorized.'),
+        category_id: z.string().optional().describe(
+          'Category ID (from ynab_get_categories). Omit to leave uncategorized, or when passing subtransactions.'
+        ),
+        subtransactions: z.array(splitLineSchema).optional().describe(
+          'Split lines for a multi-category scheduled transaction. Omit category_id on the parent. At least two lines; amounts must sum to amount.'
+        ),
         memo: z.string().optional().describe('Optional memo.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
       },
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
+        if (args.subtransactions?.length && args.category_id) {
+          throw new Error(
+            'Omit category_id when splitting. Each split line has its own category_id.'
+          );
+        }
+        const subtransactions = args.subtransactions?.length
+          ? buildSplitLines(args.amount, args.subtransactions)
+          : undefined;
         const response = await api.scheduledTransactions.createScheduledTransaction(planId, {
           scheduled_transaction: {
             account_id: args.account_id,
@@ -94,6 +158,10 @@ export function registerScheduledTools(server: McpServer): void {
             ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
             ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
             ...(args.category_id !== undefined && { category_id: args.category_id }),
+            ...(subtransactions !== undefined && {
+              category_id: null,
+              subtransactions,
+            }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
           },
@@ -109,15 +177,14 @@ export function registerScheduledTools(server: McpServer): void {
         'Update an existing scheduled transaction. Only the provided fields are changed; ' +
         'the rest keep their current values. ' +
         'Requires scheduled_transaction_id (from ynab_get_scheduled_transactions). ' +
+        'The YNAB API cannot add or change splits on an existing scheduled transaction. ' +
         'Returns the updated scheduled transaction.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         scheduled_transaction_id: z.string().describe('The scheduled transaction to update.'),
         account_id: z.string().optional().describe('Move it to a different account.'),
         date: z.string().optional().describe('New upcoming date (YYYY-MM-DD). Must be in the future.'),
-        amount: z.number().optional().describe(
-          'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.'
-        ),
+        amount: z.number().optional().describe(AMOUNT_DESC),
         frequency: frequencySchema.optional().describe('New repeat frequency.'),
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
