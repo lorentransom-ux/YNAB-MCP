@@ -4,7 +4,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-23 budget tools — 12 read, 11 write — all accessible via Claude chat.
+26 budget tools — 12 read, 14 write — all accessible via Claude chat.
 
 **Read tools:**
 
@@ -32,14 +32,17 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_delete_transaction` | Delete a transaction |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
 | `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
-| `ynab_update_category` | Rename a category or edit its note/group |
+| `ynab_update_category` | Rename a category, edit its note/group, or set/remove goal target fields |
 | `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction, including splits |
 | `ynab_update_scheduled_transaction` | Edit a scheduled transaction |
 | `ynab_delete_scheduled_transaction` | Delete a scheduled transaction |
 | `ynab_rename_payee` | Rename a payee |
 | `ynab_create_account` | Create an unlinked (manually tracked) account |
+| `ynab_create_category` | Create a category in a group; optionally set goal target/date/frequency |
+| `ynab_create_category_group` | Create a category group (name, max 50 characters) |
+| `ynab_update_category_group` | Rename a category group |
 
-Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. The YNAB API cannot create or delete budgets, delete accounts, or edit goals/targets, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction — those still have to be split in the YNAB app.
+Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. Categories and category groups can be created, and goal targets can be set or updated (`goal_target`, `goal_target_date`, `goal_needs_whole_amount`, `goal_frequency`). The YNAB API still cannot create or delete a plan (budget) and still cannot delete accounts, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction — those still have to be split in the YNAB app.
 
 ### Split transactions (multiple categories)
 
@@ -339,7 +342,7 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 
 - Your YNAB Personal Access Token is only read from the environment — never committed to code
 - The Telegram bot token is environment-only and used outbound only — never in code or logs
-- All tools are read-only; no write operations are exposed
+- Write tools mutate the household YNAB budget via the personal access token; they cannot create or delete a plan, or delete accounts
 - Access requires explicit approval in your browser — unapproved requests are rejected
 - PKCE prevents authorization codes from being stolen or replayed
 - Sessions are isolated per Claude connection
