@@ -146,3 +146,41 @@ export function ynabWrite(
     return jsonResult(result);
   });
 }
+
+// The official ynab JS SDK in this repo (4.1.0, generated from spec 1.83.0)
+// serializes SaveCategory without goal_frequency, which spec 1.86.0 added.
+// Category create/update that include goal_frequency use this helper so the
+// field is actually sent. Same token and error-body shape as the SDK.
+const YNAB_API_BASE = 'https://api.ynab.com/v1';
+
+export async function ynabApiJson<T>(
+  method: 'POST' | 'PATCH',
+  path: string,
+  body: unknown
+): Promise<T> {
+  const token = process.env.YNAB_TOKEN;
+  if (!token) {
+    throw new Error('YNAB_TOKEN environment variable is not set.');
+  }
+  const res = await fetch(`${YNAB_API_BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error(
+      `YNAB API returned a non-JSON response (${res.status} ${res.statusText}).`
+    );
+  }
+  if (!res.ok) {
+    throw json;
+  }
+  return json as T;
+}
