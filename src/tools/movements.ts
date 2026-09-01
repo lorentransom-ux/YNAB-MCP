@@ -40,7 +40,7 @@ export function registerMovementTools(server: McpServer): void {
             memo: t.memo ?? null,
             cleared: t.cleared,
             flag_color: t.flag_color ?? null,
-            flag_name: (t as { flag_name?: string | null }).flag_name ?? null,
+            flag_name: t.flag_name ?? null,
           }));
       })
   );

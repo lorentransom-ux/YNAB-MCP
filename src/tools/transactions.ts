@@ -19,10 +19,6 @@ const splitLineSchema = z.object({
   memo: z.string().optional().describe('Optional memo on this split line.'),
 });
 
-type TransactionWithFlagName = (TransactionDetail | HybridTransaction) & {
-  flag_name?: string | null;
-};
-
 function mapSubtransactions(t: TransactionDetail | HybridTransaction) {
   const detail = t as TransactionDetail;
   const subs = Array.isArray(detail.subtransactions) ? detail.subtransactions : [];
@@ -39,7 +35,6 @@ function mapSubtransactions(t: TransactionDetail | HybridTransaction) {
 }
 
 function mapTransaction(t: TransactionDetail | HybridTransaction) {
-  const tx = t as TransactionWithFlagName;
   const subtransactions = mapSubtransactions(t);
   return {
     id: t.id,
@@ -53,7 +48,7 @@ function mapTransaction(t: TransactionDetail | HybridTransaction) {
     approved: t.approved,
     transfer_account_id: t.transfer_account_id ?? null,
     flag_color: t.flag_color ?? null,
-    flag_name: tx.flag_name ?? null,
+    flag_name: t.flag_name ?? null,
     ...(subtransactions ? { subtransactions } : {}),
   };
 }
@@ -262,6 +257,10 @@ export function registerTransactionTools(server: McpServer): void {
           );
         }
 
+        // YNAB records a transfer as a transaction whose payee is the destination
+        // account's transfer payee, carrying no category. Resolve that here so the
+        // caller can pass either the transfer_payee_id or a "Transfer : X" name.
+        let isTransfer = false;
         if (isTransferName(payeeName) || payeeId) {
           const payees = await loadPayees(api, planId);
           if (isTransferName(payeeName) && !payeeId) {
@@ -277,27 +276,21 @@ export function registerTransactionTools(server: McpServer): void {
               );
             }
             payeeId = match.id;
+            isTransfer = true;
+          } else if (payeeId) {
+            isTransfer = Boolean(payees.find((p) => p.id === payeeId)?.transfer_account_id);
+          }
+          if (isTransfer) {
             payeeName = undefined;
             categoryId = undefined;
-          } else if (payeeId) {
-            const match = payees.find((p) => p.id === payeeId);
-            if (match?.transfer_account_id) {
-              payeeName = undefined;
-              categoryId = undefined;
-            }
           }
         }
 
-        if (splits?.length && categoryId === undefined && payeeId) {
-          // Transfers cannot also be category splits.
-          const payees = await loadPayees(api, planId);
-          const match = payees.find((p) => p.id === payeeId);
-          if (match?.transfer_account_id) {
-            throw new Error(
-              'A transfer cannot also be split across categories. ' +
-                'Create a regular (non-transfer) transaction with subtransactions instead.'
-            );
-          }
+        if (isTransfer && splits?.length) {
+          throw new Error(
+            'A transfer cannot also be split across categories. ' +
+              'Create a regular (non-transfer) transaction with subtransactions instead.'
+          );
         }
 
         const subtransactions = splits?.length

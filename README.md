@@ -4,7 +4,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-26 budget tools — 12 read, 14 write — all accessible via Claude chat.
+27 budget tools — 13 read, 14 write — all accessible via Claude chat.
 
 **Read tools:**
 
@@ -19,6 +19,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_transactions_by_account` | Transactions for a specific account (includes flags) |
 | `ynab_get_transactions_by_category` | Transactions for a specific category (includes flags) |
 | `ynab_get_transactions_by_payee` | Transactions for a specific payee (includes flags) |
+| `ynab_get_category_groups` | Category group IDs and names, including empty and hidden groups |
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_movements` | Account-to-account transfers (includes flags) |
@@ -33,7 +34,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
 | `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
 | `ynab_update_category` | Rename a category, edit its note/group, or set/remove goal target fields |
-| `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction, including splits |
+| `ynab_create_scheduled_transaction` | Add a recurring or future-dated transaction (single category; the API cannot create scheduled splits) |
 | `ynab_update_scheduled_transaction` | Edit a scheduled transaction |
 | `ynab_delete_scheduled_transaction` | Delete a scheduled transaction |
 | `ynab_rename_payee` | Rename a payee |
@@ -42,7 +43,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_create_category_group` | Create a category group (name, max 50 characters) |
 | `ynab_update_category_group` | Rename a category group |
 
-Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. Categories and category groups can be created, and goal targets can be set or updated (`goal_target`, `goal_target_date`, `goal_needs_whole_amount`, `goal_frequency`). The YNAB API still cannot create or delete a plan (budget) and still cannot delete accounts, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction — those still have to be split in the YNAB app.
+Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. Categories and category groups can be created, and goal targets can be set or updated (`goal_target`, `goal_target_date`, `goal_needs_whole_amount`, `goal_frequency`); use `ynab_get_category_groups` to get the `category_group_id` these need. The YNAB API still cannot create or delete a plan (budget) and still cannot delete accounts, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction, and cannot create split *scheduled* transactions at all — those still have to be split in the YNAB app.
 
 ### Split transactions (multiple categories)
 
@@ -53,7 +54,9 @@ To create a new split (for example a Rouse's trip that is part groceries, part h
 
 Example: a $47.20 outflow, $32.10 groceries and $15.10 supplies — `amount: -47.20` and two lines `-32.10` / `-15.10`.
 
-Reads (`ynab_get_transactions` and the filtered variants) return a `subtransactions` array on split transactions. `ynab_create_scheduled_transaction` accepts the same `subtransactions` shape.
+Reads (`ynab_get_transactions` and the filtered variants) return a `subtransactions` array on split transactions.
+
+Splits are **create-only, and only on regular transactions**. The YNAB API has no `subtransactions` field on `SaveScheduledTransaction`, so `ynab_create_scheduled_transaction` takes a single `category_id` — to get a recurring split, create the scheduled transaction here and split its occurrences in the YNAB app. `ynab_get_scheduled_transactions` still returns `subtransactions` for scheduled splits that already exist.
 
 The public API will not convert an already-imported bank transaction into a split. For those, split in the YNAB app (or delete and recreate, which drops the bank match).
 

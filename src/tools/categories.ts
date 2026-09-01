@@ -166,6 +166,30 @@ export function registerCategoryTools(server: McpServer): void {
   );
 
   server.registerTool(
+    'ynab_get_category_groups',
+    {
+      description:
+        'List category groups with their IDs, names, and hidden status. ' +
+        'Use this to get a category_group_id for ynab_create_category or ' +
+        'ynab_update_category_group. Unlike ynab_get_categories, this also returns groups ' +
+        'that are hidden or that contain no categories yet — including one you just created.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+      },
+    },
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
+        const response = await cachedFetch(
+          `categories:${planId}`,
+          () => api.categories.getCategories(planId)
+        );
+        return response.data.category_groups
+          .filter((g) => !g.deleted)
+          .map(mapCategoryGroup);
+      })
+  );
+
+  server.registerTool(
     'ynab_create_category',
     {
       description:

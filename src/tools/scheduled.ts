@@ -25,14 +25,11 @@ const flagColorSchema = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'pur
 const AMOUNT_DESC =
   'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
 
-const splitLineSchema = z.object({
-  amount: z.number().describe(AMOUNT_DESC),
-  category_id: z.string().describe(
-    'Category ID for this split line (from ynab_get_categories).'
-  ),
-  memo: z.string().optional().describe('Optional memo on this split line.'),
-});
-
+// NOTE: the YNAB API cannot create split scheduled transactions — SaveScheduledTransaction
+// has no subtransactions field (spec 1.85.0), and the SDK serializer drops it silently, so
+// passing splits here would produce an uncategorized scheduled transaction while appearing
+// to succeed. Splits are read-only on this resource: mapSubtransactions below surfaces the
+// ones created in the YNAB app. Regular splits go through ynab_create_transaction.
 function mapSubtransactions(t: ScheduledTransactionDetail) {
   const subs = Array.isArray(t.subtransactions) ? t.subtransactions : [];
   const live = subs.filter((s) => !s.deleted);
@@ -61,29 +58,6 @@ function mapScheduled(t: ScheduledTransactionDetail) {
     memo: t.memo ?? null,
     ...(subtransactions ? { subtransactions } : {}),
   };
-}
-
-function buildSplitLines(
-  parentAmount: number,
-  splits: { amount: number; category_id: string; memo?: string }[]
-): { amount: number; category_id: string; memo?: string }[] {
-  if (splits.length < 2) {
-    throw new Error('A split needs at least two lines, each with amount and category_id.');
-  }
-  const parentMilli = toMilliunits(parentAmount);
-  const lines = splits.map((s) => ({
-    amount: toMilliunits(s.amount),
-    category_id: s.category_id,
-    ...(s.memo !== undefined && { memo: s.memo }),
-  }));
-  const sum = lines.reduce((acc, s) => acc + (s.amount ?? 0), 0);
-  if (sum !== parentMilli) {
-    throw new Error(
-      `Split line amounts must add up to the transaction amount (${parentAmount}). ` +
-        `They currently add up to ${sum / 1000}.`
-    );
-  }
-  return lines;
 }
 
 export function registerScheduledTools(server: McpServer): void {
@@ -116,8 +90,9 @@ export function registerScheduledTools(server: McpServer): void {
       description:
         'Create a recurring or one-time future (scheduled) transaction. ' +
         'Requires account_id (from ynab_get_accounts) and a future date. ' +
-        'To split across categories, omit category_id and pass subtransactions ' +
-        '(at least two lines; amounts must sum to amount). ' +
+        'The YNAB API cannot create a SPLIT scheduled transaction (one amount divided across ' +
+        'several categories) — pass a single category_id here, then split the occurrence in the ' +
+        'YNAB app, or use ynab_create_transaction for a one-off split. ' +
         'Returns the created scheduled transaction.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
@@ -130,10 +105,7 @@ export function registerScheduledTools(server: McpServer): void {
         payee_id: z.string().optional().describe('Existing payee ID. Prefer payee_name unless the ID is known.'),
         payee_name: z.string().optional().describe('Payee name. Matched to an existing payee or created.'),
         category_id: z.string().optional().describe(
-          'Category ID (from ynab_get_categories). Omit to leave uncategorized, or when passing subtransactions.'
-        ),
-        subtransactions: z.array(splitLineSchema).optional().describe(
-          'Split lines for a multi-category scheduled transaction. Omit category_id on the parent. At least two lines; amounts must sum to amount.'
+          'Category ID (from ynab_get_categories). Omit to leave uncategorized.'
         ),
         memo: z.string().optional().describe('Optional memo.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
@@ -141,14 +113,6 @@ export function registerScheduledTools(server: McpServer): void {
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
-        if (args.subtransactions?.length && args.category_id) {
-          throw new Error(
-            'Omit category_id when splitting. Each split line has its own category_id.'
-          );
-        }
-        const subtransactions = args.subtransactions?.length
-          ? buildSplitLines(args.amount, args.subtransactions)
-          : undefined;
         const response = await api.scheduledTransactions.createScheduledTransaction(planId, {
           scheduled_transaction: {
             account_id: args.account_id,
@@ -158,7 +122,6 @@ export function registerScheduledTools(server: McpServer): void {
             ...(args.payee_id !== undefined && { payee_id: args.payee_id }),
             ...(args.payee_name !== undefined && { payee_name: args.payee_name }),
             ...(args.category_id !== undefined && { category_id: args.category_id }),
-            ...(subtransactions !== undefined && { subtransactions }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
           },
