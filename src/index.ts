@@ -1,7 +1,5 @@
 import express from 'express';
-import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createMcpServer } from './server.js';
@@ -52,45 +50,28 @@ app.post('/telegram', handleInboundTelegram);
 
 const bearerAuth = requireBearerAuth({ verifier: oauthProvider });
 
-const transports = new Map<string, StreamableHTTPServerTransport>();
-
+// Stateless MCP transport: every POST gets its own server + transport, which
+// are torn down as soon as the response finishes. Nothing is kept between
+// requests, so memory stays flat no matter how many clients connect or whether
+// they ever send DELETE. Previously each initialize created a session held in a
+// Map until the client sent DELETE; clients that never did (e.g. an always-on
+// agent reconnecting every few minutes) leaked a full McpServer per connect.
+//
+// Trade-off: no server-initiated messages (GET SSE stream, notifications,
+// sampling/elicitation, resumability). No tool here uses any of them.
 app.post('/mcp', bearerAuth, async (req, res) => {
+  const server = createMcpServer();
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  transport.onerror = (err) => console.error('[MCP] Transport error:', err);
+
+  res.on('close', () => {
+    void transport.close();
+    void server.close();
+  });
+
   try {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    if (sessionId && transports.has(sessionId)) {
-      await transports.get(sessionId)!.handleRequest(req, res, req.body);
-      return;
-    }
-
-    if (!sessionId && isInitializeRequest(req.body)) {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports.set(sid, transport);
-          console.log(`[MCP] Session initialized: ${sid}`);
-        },
-      });
-
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) {
-          transports.delete(sid);
-          console.log(`[MCP] Session closed: ${sid}`);
-        }
-      };
-
-      const server = createMcpServer();
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-      return;
-    }
-
-    res.status(400).json({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Bad Request: no valid session or initialize request' },
-      id: null,
-    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
   } catch (err) {
     console.error('[MCP] POST error:', err);
     if (!res.headersSent) {
@@ -103,23 +84,17 @@ app.post('/mcp', bearerAuth, async (req, res) => {
   }
 });
 
-app.get('/mcp', bearerAuth, async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !transports.has(sessionId)) {
-    res.status(400).send('Invalid or missing session ID');
-    return;
-  }
-  await transports.get(sessionId)!.handleRequest(req, res);
-});
-
-app.delete('/mcp', bearerAuth, async (req, res) => {
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  if (!sessionId || !transports.has(sessionId)) {
-    res.status(400).send('Invalid or missing session ID');
-    return;
-  }
-  await transports.get(sessionId)!.handleRequest(req, res);
-});
+// Stateless mode has no standalone SSE stream or sessions to terminate. The MCP
+// spec has servers answer 405 here, which clients treat as "not supported".
+const methodNotAllowed = (_req: express.Request, res: express.Response) => {
+  res.status(405).set('Allow', 'POST').json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'Method not allowed' },
+    id: null,
+  });
+};
+app.get('/mcp', bearerAuth, methodNotAllowed);
+app.delete('/mcp', bearerAuth, methodNotAllowed);
 
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[YNAB-MCP] Server listening on port ${PORT}`);
@@ -148,11 +123,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   }
 });
 
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
+  // No sessions to drain: each MCP request's transport closes with its response.
   console.log('[YNAB-MCP] SIGTERM received, shutting down...');
-  for (const [sid, transport] of transports) {
-    try { await transport.close(); } catch { /* ignore */ }
-    transports.delete(sid);
-  }
   process.exit(0);
 });
