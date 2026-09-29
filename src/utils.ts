@@ -53,6 +53,39 @@ export function findCategoryByName<T extends { name: string; deleted?: boolean }
   return live.find((c) => normalizeCategoryName(c.name) === norm);
 }
 
+// Matches a trailing day-of-month range such as "1st–7th" or "1st - 7th".
+const DAY_RANGE_SUFFIX = /^(.*\S)\s+(\d{1,2})(?:st|nd|rd|th)?\s*[–-]\s*(\d{1,2})(?:st|nd|rd|th)?$/;
+
+// Finds the weekly split of a category that covers the given day of month, e.g.
+// a stored "Eating Out" resolves to "🍔 Eating Out 1st–7th" on the 3rd. With no
+// day given, returns the first split found (used to validate a base name).
+export function findWeeklyCategory<T extends { name: string; deleted?: boolean }>(
+  categories: T[],
+  name: string,
+  day?: number
+): T | undefined {
+  const base = normalizeCategoryName(name);
+  if (!base) return undefined;
+  for (const c of categories) {
+    if (c.deleted) continue;
+    const m = DAY_RANGE_SUFFIX.exec(normalizeCategoryName(c.name));
+    if (!m || m[1] !== base) continue;
+    if (day === undefined || (day >= Number(m[2]) && day <= Number(m[3]))) return c;
+  }
+  return undefined;
+}
+
+// Resolves a stored alert/digest category name for a scheduled run: exact or
+// emoji-tolerant match first, then the weekly split covering today in timeZone.
+export function resolveScheduledCategory<T extends { name: string; deleted?: boolean }>(
+  categories: T[],
+  name: string,
+  timeZone: string
+): T | undefined {
+  const day = Number(new Date().toLocaleDateString('en-US', { timeZone, day: 'numeric' }));
+  return findCategoryByName(categories, name) ?? findWeeklyCategory(categories, name, day);
+}
+
 // When a transaction tool is called without since_date, bound the otherwise
 // full-history fetch to this many days back.
 export const DEFAULT_SINCE_DAYS = 90;

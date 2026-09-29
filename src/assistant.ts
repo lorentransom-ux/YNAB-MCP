@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay, daysAgoInTz, normalizeCategoryName, findCategoryByName } from './utils.js';
+import { toUSDDisplay, daysAgoInTz, normalizeCategoryName, findCategoryByName, findWeeklyCategory } from './utils.js';
 import {
   applyConfigUpdate,
   addThreshold,
@@ -124,6 +124,9 @@ async function resolveCategory(
 
   const match = findCategoryByName(allCategories, name);
   if (match) return { category: match };
+  // A base name for weekly splits ("Eating Out" → "Eating Out 1st–7th", …) is kept
+  // as typed; the alert engine resolves it to the current week on each run.
+  if (findWeeklyCategory(allCategories, name)) return { category: { name } };
 
   // No match — offer up to 5 visible categories that share a word with the query.
   const words = normalizeCategoryName(name).split(' ').filter(Boolean);

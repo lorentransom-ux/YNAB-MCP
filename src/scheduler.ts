@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay, findCategoryByName } from './utils.js';
+import { toUSDDisplay, resolveScheduledCategory } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, type UserConfig } from './config.js';
 
@@ -21,11 +21,16 @@ async function buildMessage(user: UserConfig): Promise<string> {
   const allCategories = response.data.category_groups.flatMap((g) => g.categories);
 
   const ordered: typeof allCategories = [];
+  const missing: string[] = [];
   for (const name of user.categories) {
-    // Emoji-tolerant: a stored "Coffee Shops" matches YNAB's "☕️ Coffee Shops".
-    const cat = findCategoryByName(allCategories, name);
+    // Emoji-tolerant ("Coffee Shops" matches "☕️ Coffee Shops"), and a base name
+    // like "Eating Out" resolves to this week's "Eating Out 1st–7th" split.
+    const cat = resolveScheduledCategory(allCategories, name, user.timezone);
     if (cat) ordered.push(cat);
-    else console.warn(`[Scheduler] Category not found in YNAB for ${user.name}: "${name}"`);
+    else {
+      console.warn(`[Scheduler] Category not found in YNAB for ${user.name}: "${name}"`);
+      missing.push(name);
+    }
   }
 
   const { field, showGoalProgress, headerNote } = user.format;
@@ -39,6 +44,11 @@ async function buildMessage(user: UserConfig): Promise<string> {
     }
     return line;
   });
+  // Surface missing categories in the digest itself so a rename can't silently
+  // drop a line.
+  if (missing.length > 0) {
+    lines.push(`⚠️ Not found in YNAB (renamed or deleted?): ${missing.join(', ')}`);
+  }
 
   const header = headerNote ? `${headerNote}\n` : '';
   return `${header}YNAB – ${monthLabel} (${user.name})\n${lines.join('\n')}`;
