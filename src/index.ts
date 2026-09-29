@@ -67,7 +67,16 @@ const bearerAuth = requireBearerAuth({ verifier: oauthProvider });
 app.post('/mcp', bearerAuth, async (req, res) => {
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  transport.onerror = (err) => console.error('[MCP] Transport error:', err);
+  transport.onerror = (err) => {
+    // Clients that speak a newer MCP spec than this SDK supports get one 400,
+    // then renegotiate an older version and carry on. That's routine, so log a
+    // one-line warning instead of a stack trace; anything else is a real error.
+    if (/Unsupported protocol version/.test(err.message)) {
+      console.warn(`[MCP] Client requested an unsupported protocol version; it should fall back: ${err.message}`);
+      return;
+    }
+    console.error('[MCP] Transport error:', err);
+  };
 
   res.on('close', () => {
     void transport.close();

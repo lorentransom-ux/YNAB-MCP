@@ -1,0 +1,25 @@
+# Weekly dependency update PRs. Railway deploys only from main, so nothing
+# ships until a PR is reviewed and merged.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 5
+    groups:
+      # The MCP SDK gets its own PR: it's the package most likely to change
+      # behavior (protocol versions, transport), so it's worth reviewing alone.
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      # Everything else that's a minor or patch bump is batched into one PR.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+        exclude-patterns:
+          - "@modelcontextprotocol/*"
