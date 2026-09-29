@@ -92,6 +92,7 @@ Plus an optional **Telegram** integration: each person gets a scheduled budget d
 3. Open your service → **Variables** tab and add:
    - `YNAB_TOKEN` — your YNAB personal access token from Step 1
    - `SERVER_URL` — your Railway public URL (e.g. `https://your-app.railway.app`). You may need to generate the domain first (Settings → Generate Domain), then come back and add this variable.
+   - `APPROVAL_PASSPHRASE` — a passphrase only you know, entered on the approval page whenever an app connects. **Required:** without it the server refuses every approval.
 4. Railway builds and deploys automatically using `railway.toml`
 
 ### Step 3 — Connect to Claude.ai
@@ -104,7 +105,9 @@ Plus an optional **Telegram** integration: each person gets a scheduled budget d
 3. Leave the **OAuth Client ID** and **OAuth Client Secret** fields empty — the server handles registration automatically
 4. Click **Add**
 
-Claude.ai will open a page on your Railway server asking **"Authorize YNAB access?"** — click **Approve**. This happens once. After that, Claude.ai holds a token and reconnects silently.
+Claude.ai will open a page on your Railway server asking **"Authorize YNAB access?"** — enter your `APPROVAL_PASSPHRASE` and click **Approve**. This happens once. After that, Claude.ai holds a token and reconnects silently.
+
+> **Why a passphrase:** client registration is open so connectors can register themselves, which means anyone who learns your server URL can start a connection. The passphrase is what stops them from approving it. Wrong guesses are limited to 5 per connection attempt and 10 per 15 minutes server-wide (after which approvals lock for 15 minutes), and USER1 gets a Telegram alert on a wrong passphrase or a lockout.
 
 > **Note:** Registered clients and tokens are stored in Postgres (`oauth_clients` and `oauth_tokens`, with tokens saved as SHA-256 hashes), so redeploys and restarts don't log connected apps out. You'll only be asked to approve again if an app stays unused for 30 days, when its refresh token expires.
 

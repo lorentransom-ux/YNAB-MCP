@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { createMcpServer } from './server.js';
-import { oauthProvider, handleApproval } from './oauth.js';
+import { oauthProvider, handleApproval, approvalsEnabled } from './oauth.js';
 import { initScheduler } from './scheduler.js';
 import { initAlerts } from './alerts.js';
 import { initConfigStore, seedConfigFromEnv } from './config.js';
@@ -29,17 +29,22 @@ app.use(
 
 // Approval page form handler
 app.post('/oauth/approve', (req, res) => {
-  const { nonce, action } = req.body as { nonce?: string; action?: string };
-  if (!nonce || (action !== 'approve' && action !== 'deny')) {
+  const { nonce, action, passphrase } = req.body as { nonce?: string; action?: string | string[]; passphrase?: string };
+  // The Deny button submits its own action=deny alongside the form's hidden
+  // action=approve, so a repeated field means Deny was clicked.
+  const chosen = Array.isArray(action) ? (action.includes('deny') ? 'deny' : action[0]) : action;
+  if (!nonce || (chosen !== 'approve' && chosen !== 'deny')) {
     res.status(400).send('Invalid request');
     return;
   }
-  const redirectUrl = handleApproval(nonce, action);
-  if (!redirectUrl) {
-    res.status(400).send('Authorization request expired or not found. Please try connecting again.');
-    return;
+  const result = handleApproval(nonce, chosen, passphrase);
+  if (result.kind === 'redirect') {
+    res.redirect(result.url);
+  } else if (result.kind === 'page') {
+    res.status(result.status).type('html').send(result.html);
+  } else {
+    res.status(result.status).send(result.message);
   }
-  res.redirect(redirectUrl);
 });
 
 app.get('/health', (_req, res) => {
@@ -99,6 +104,9 @@ app.delete('/mcp', bearerAuth, methodNotAllowed);
 app.listen(PORT, '0.0.0.0', async () => {
   console.log(`[YNAB-MCP] Server listening on port ${PORT}`);
   console.log(`[YNAB-MCP] Server URL: ${SERVER_URL}`);
+  if (!approvalsEnabled()) {
+    console.error('[YNAB-MCP] APPROVAL_PASSPHRASE is not set: new apps cannot be approved until it is');
+  }
   if (!process.env.YNAB_TOKEN) {
     console.warn('[YNAB-MCP] WARNING: YNAB_TOKEN is not set');
   }
