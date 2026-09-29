@@ -106,7 +106,7 @@ Plus an optional **Telegram** integration: each person gets a scheduled budget d
 
 Claude.ai will open a page on your Railway server asking **"Authorize YNAB access?"** — click **Approve**. This happens once. After that, Claude.ai holds a token and reconnects silently.
 
-> **Note:** If the server restarts (e.g. after a Railway redeploy), Claude.ai will prompt you to approve again. This is normal — tokens are held in memory.
+> **Note:** Registered clients and tokens are stored in Postgres (`oauth_clients` and `oauth_tokens`, with tokens saved as SHA-256 hashes), so redeploys and restarts don't log connected apps out. You'll only be asked to approve again if an app stays unused for 30 days, when its refresh token expires.
 
 ---
 

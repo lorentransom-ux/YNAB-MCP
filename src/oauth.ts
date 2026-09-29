@@ -5,6 +5,13 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { OAuthClientInformationFull, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { InvalidTokenError, InvalidGrantError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import {
+  getOAuthClient,
+  saveOAuthClient,
+  saveOAuthToken,
+  findOAuthToken,
+  pruneExpiredOAuthTokens,
+} from './db.js';
 
 interface PendingAuth {
   client: OAuthClientInformationFull;
@@ -19,26 +26,26 @@ interface AuthCode {
   expiresAt: number;
 }
 
-interface TokenEntry {
-  clientId: string;
-  expiresAt: number;
-}
+const ACCESS_TOKEN_TTL_S = 3600;
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-const registeredClients = new Map<string, OAuthClientInformationFull>();
+// Registered clients and issued tokens are stored in Postgres (see db.ts) so they
+// survive redeploys. Only the approval flow's short-lived state stays in memory:
+// pending approvals expire in 10 minutes and authorization codes in 5, so losing
+// them on a restart just means retrying a login that was mid-flight.
 const pendingAuths = new Map<string, PendingAuth>();
 const authCodes = new Map<string, AuthCode>();
-const accessTokens = new Map<string, TokenEntry>();
-const refreshTokens = new Map<string, TokenEntry>();
 
-// Drop expired entries so these maps don't grow unbounded over long uptimes.
-// registeredClients have no expiry (client_secret_expires_at: 0) and are kept.
 function pruneExpired(): void {
   const now = Date.now();
-  for (const map of [pendingAuths, authCodes, accessTokens, refreshTokens]) {
+  for (const map of [pendingAuths, authCodes]) {
     for (const [key, entry] of map) {
       if (entry.expiresAt < now) map.delete(key);
     }
   }
+  pruneExpiredOAuthTokens().catch((err) => {
+    console.error('[OAuth] Failed to prune expired tokens:', err instanceof Error ? err.message : err);
+  });
 }
 
 const pruneTimer = setInterval(pruneExpired, 10 * 60 * 1000);
@@ -87,7 +94,7 @@ export function handleApproval(
 
 const clientsStore: OAuthRegisteredClientsStore = {
   getClient(clientId: string) {
-    return registeredClients.get(clientId);
+    return getOAuthClient(clientId);
   },
 
   async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>) {
@@ -98,7 +105,8 @@ const clientsStore: OAuthRegisteredClientsStore = {
       client_id_issued_at: Math.floor(Date.now() / 1000),
       client_secret_expires_at: 0,
     };
-    registeredClients.set(fullClient.client_id, fullClient);
+    await saveOAuthClient(fullClient);
+    console.log(`[OAuth] Registered client ${fullClient.client_id} (${fullClient.client_name ?? 'unnamed'})`);
     return fullClient;
   },
 };
@@ -184,21 +192,15 @@ export const oauthProvider: OAuthServerProvider = {
 
     const accessToken = randomUUID();
     const refreshToken = randomUUID();
-    const expiresIn = 3600;
+    const now = Date.now();
 
-    accessTokens.set(accessToken, {
-      clientId: client.client_id,
-      expiresAt: Date.now() + expiresIn * 1000,
-    });
-    refreshTokens.set(refreshToken, {
-      clientId: client.client_id,
-      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-    });
+    await saveOAuthToken(accessToken, 'access', client.client_id, now + ACCESS_TOKEN_TTL_S * 1000);
+    await saveOAuthToken(refreshToken, 'refresh', client.client_id, now + REFRESH_TOKEN_TTL_MS);
 
     return {
       access_token: accessToken,
       token_type: 'bearer',
-      expires_in: expiresIn,
+      expires_in: ACCESS_TOKEN_TTL_S,
       refresh_token: refreshToken,
     };
   },
@@ -207,41 +209,43 @@ export const oauthProvider: OAuthServerProvider = {
     client: OAuthClientInformationFull,
     refreshToken: string
   ): Promise<OAuthTokens> {
-    const entry = refreshTokens.get(refreshToken);
-    if (!entry || entry.expiresAt < Date.now() || entry.clientId !== client.client_id) {
+    const entry = await findOAuthToken(refreshToken, 'refresh');
+    if (!entry || entry.clientId !== client.client_id) {
       throw new InvalidGrantError('Invalid or expired refresh token');
     }
 
     const accessToken = randomUUID();
-    const expiresIn = 3600;
-
-    accessTokens.set(accessToken, {
-      clientId: client.client_id,
-      expiresAt: Date.now() + expiresIn * 1000,
-    });
+    await saveOAuthToken(accessToken, 'access', client.client_id, Date.now() + ACCESS_TOKEN_TTL_S * 1000);
 
     return {
       access_token: accessToken,
       token_type: 'bearer',
-      expires_in: expiresIn,
+      expires_in: ACCESS_TOKEN_TTL_S,
       refresh_token: refreshToken,
     };
   },
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const entry = accessTokens.get(token);
-    if (!entry || entry.expiresAt < Date.now()) {
-      // Must be an InvalidTokenError (not a generic Error): the SDK's requireBearerAuth
-      // maps it to a 401 so the client re-runs OAuth, whereas a plain Error becomes a 500
-      // that clients retry forever. Tokens live only in memory, so every redeploy makes
-      // already-connected clients present a now-unknown token — they need the 401 to recover.
+    // A database error propagates as a plain Error, which requireBearerAuth turns
+    // into a 500: the client retries rather than discarding a token that is still
+    // valid and sending the user back through the approval page.
+    let entry: Awaited<ReturnType<typeof findOAuthToken>>;
+    try {
+      entry = await findOAuthToken(token, 'access');
+    } catch (err) {
+      console.error('[OAuth] Token lookup failed:', err instanceof Error ? err.message : err);
+      throw err;
+    }
+    if (!entry) {
+      // Must be an InvalidTokenError: requireBearerAuth maps it to a 401, which is
+      // the client's signal to refresh or re-run OAuth.
       throw new InvalidTokenError('Invalid or expired access token');
     }
     return {
       token,
       clientId: entry.clientId,
       scopes: [],
-      expiresAt: Math.floor(entry.expiresAt / 1000),
+      expiresAt: Math.floor(entry.expiresAtMs / 1000),
     };
   },
 };
