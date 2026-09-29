@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from 'node-cron';
-import { getYnabClient, cachedFetch } from './ynab.js';
+import { getYnabClient, cachedFetch, handleYnabError } from './ynab.js';
 import { toUSDDisplay, resolveScheduledCategory } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, type UserConfig } from './config.js';
@@ -67,6 +67,16 @@ async function runForUser(name: string, chatId: number): Promise<void> {
     await sendTelegram(chatId, message);
   } catch (err) {
     console.error(`[Scheduler] Error for ${name}:`, err);
+    // A missing digest looks like a quiet day, so say it failed.
+    const msg = handleYnabError(err);
+    try {
+      await sendTelegram(
+        chatId,
+        `⚠️ Your YNAB digest couldn't be built. ${msg.slice(0, 200)} It will try again at the next scheduled time.`
+      );
+    } catch {
+      // sendTelegram already logged; if Telegram itself is failing there's no other channel.
+    }
   }
 }
 

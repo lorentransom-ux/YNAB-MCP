@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from 'node-cron';
-import { getYnabClient, cachedFetch } from './ynab.js';
+import { getYnabClient, cachedFetch, handleYnabError } from './ynab.js';
 import { toUSDDisplay, resolveScheduledCategory } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, setThresholdState, type Threshold } from './config.js';
@@ -90,11 +90,41 @@ async function checkUserThresholds(userName: string): Promise<void> {
   }
 }
 
-function runCheck(userName: string): void {
+// Users told their alert checks are failing, so an outage (e.g. an expired YNAB
+// token) produces one notice when it starts and one when it clears, not one per run.
+const failingUsers = new Set<string>();
+
+async function notifyUser(userName: string, text: string): Promise<boolean> {
+  const chatId = loadConfig().users.find((u) => u.name === userName)?.telegramChatId;
+  if (chatId === undefined) return false;
+  try {
+    await sendTelegram(chatId, text);
+    return true;
+  } catch {
+    return false; // sendTelegram already logged
+  }
+}
+
+async function runCheck(userName: string): Promise<void> {
   console.log(`[Alerts] Checking thresholds for ${userName}`);
-  void checkUserThresholds(userName).catch((err) =>
-    console.error(`[Alerts] Error for ${userName}:`, err instanceof Error ? err.message : err)
-  );
+  try {
+    await checkUserThresholds(userName);
+    if (failingUsers.has(userName)) {
+      failingUsers.delete(userName);
+      await notifyUser(userName, '✅ Your YNAB balance alerts are working again.');
+    }
+  } catch (err) {
+    const msg = handleYnabError(err);
+    console.error(`[Alerts] Error for ${userName}:`, msg);
+    if (!failingUsers.has(userName)) {
+      const sent = await notifyUser(
+        userName,
+        `⚠️ Your YNAB balance alerts couldn't run. ${msg.slice(0, 200)} ` +
+        "I'll keep retrying every 2 hours and tell you when they recover."
+      );
+      if (sent) failingUsers.add(userName);
+    }
+  }
 }
 
 export function initAlerts(): void {
@@ -110,7 +140,7 @@ export function initAlerts(): void {
     if (user.telegramChatId === undefined) continue;
     const existing = activeAlertTasks.get(user.name);
     if (existing) existing.stop();
-    const task = cron.schedule(ALERT_SCHEDULE, () => { runCheck(user.name); }, { timezone: user.timezone });
+    const task = cron.schedule(ALERT_SCHEDULE, () => { void runCheck(user.name); }, { timezone: user.timezone });
     activeAlertTasks.set(user.name, task);
     console.log(`[Alerts] Registered: ${user.name} | schedule="${ALERT_SCHEDULE}" | tz=${user.timezone}`);
   }
