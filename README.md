@@ -218,6 +218,9 @@ USER2_CATEGORIES=Groceries,Clothing,Personal Care
 USER2_TIMEZONE=America/Chicago
 USER2_TELEGRAM_ID=987654321
 
+# Required: passphrase you enter on the approval page when connecting an app
+APPROVAL_PASSPHRASE=a-few-random-words-only-you-know
+
 # Optional: pin to a specific YNAB budget ID (defaults to your last-used budget)
 # YNAB_BUDGET_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
@@ -333,8 +336,8 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 
 ## Architecture
 
-- **Transport**: Streamable HTTP (MCP spec) with stateful sessions
-- **Auth**: OAuth 2.0 with dynamic client registration and PKCE. Claude.ai registers itself automatically; you approve access once in your browser.
+- **Transport**: Streamable HTTP (MCP spec) in stateless mode. Each POST to `/mcp` gets a fresh server and transport that are closed when the response ends, so memory stays flat no matter how often clients connect or whether they ever close their session. `GET` and `DELETE /mcp` return 405 (no standalone SSE stream); no tool uses server-initiated messages.
+- **Auth**: OAuth 2.0 with dynamic client registration and PKCE. Connectors register themselves automatically; you approve each one once in your browser with `APPROVAL_PASSPHRASE`. Clients and tokens are stored in Postgres, so they survive redeploys.
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
 - **Transfers**: Accounts include `transfer_payee_id`; create a linked transfer with that id as `payee_id` and no `category_id`
@@ -349,6 +352,7 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 - Your YNAB Personal Access Token is only read from the environment — never committed to code
 - The Telegram bot token is environment-only and used outbound only — never in code or logs
 - Write tools mutate the household YNAB budget via the personal access token; they cannot create or delete a plan, or delete accounts
-- Access requires explicit approval in your browser — unapproved requests are rejected
+- Access requires explicit approval in your browser with `APPROVAL_PASSPHRASE` — unapproved requests are rejected, and approvals are refused entirely if the passphrase isn't set
+- Wrong passphrases are rate-limited (5 per connection attempt, 10 per 15 minutes server-wide), and USER1 gets a Telegram alert on a wrong passphrase or lockout
+- Access and refresh tokens are stored only as SHA-256 hashes; client secrets are stored as issued because the MCP SDK compares them directly, but a secret alone can't obtain a token without the passphrase or a valid refresh token
 - PKCE prevents authorization codes from being stolen or replayed
-- Sessions are isolated per Claude connection
