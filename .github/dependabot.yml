@@ -10,6 +10,15 @@ updates:
       time: "08:00"
       timezone: America/Chicago
     open-pull-requests-limit: 5
+    ignore:
+      # Keep Node type definitions matched to the runtime (node:22-slim in the
+      # Dockerfile). Bump both together when moving to a newer Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # zod 4 drops additionalProperties:false from every tool input schema under
+      # the current MCP SDK. Revisit once the SDK adopts zod 4 natively.
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
     groups:
       # The MCP SDK gets its own PR: it's the package most likely to change
       # behavior (protocol versions, transport), so it's worth reviewing alone.
