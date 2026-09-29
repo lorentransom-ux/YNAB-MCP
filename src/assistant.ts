@@ -186,6 +186,33 @@ async function runAlertTool(userName: string, input: unknown): Promise<string> {
 // schedule changed. Returns a short result string fed back to the model.
 async function runConfigTool(userName: string, input: unknown): Promise<string> {
   const update = (input ?? {}) as ConfigUpdate;
+
+  // Verify every digest category exists in YNAB before saving (as the alert tool
+  // does), so a typo is caught now instead of surfacing as a warning line in the
+  // next digest. All-or-nothing: one bad name saves nothing.
+  if (update.categories !== undefined) {
+    const canonical: string[] = [];
+    const problems: string[] = [];
+    for (const name of update.categories) {
+      let resolved: Awaited<ReturnType<typeof resolveCategory>>;
+      try {
+        resolved = await resolveCategory(name);
+      } catch {
+        return "I couldn't reach YNAB to verify the categories just now, so I did not change the digest. Please try again in a moment.";
+      }
+      if ('category' in resolved) {
+        canonical.push(resolved.category.name);
+      } else {
+        const hint = resolved.suggestions.length > 0 ? ` (did you mean: ${resolved.suggestions.join(', ')}?)` : '';
+        problems.push(`"${name}"${hint}`);
+      }
+    }
+    if (problems.length > 0) {
+      return `I couldn't find these YNAB categories, so I did NOT change the digest: ${problems.join('; ')}.`;
+    }
+    update.categories = canonical;
+  }
+
   const result = await applyConfigUpdate(userName, update);
   if ('error' in result) return result.error;
   if (result.changes.length === 0) return 'No changes were specified.';
