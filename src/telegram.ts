@@ -51,7 +51,14 @@ export async function registerTelegramWebhook(serverUrl: string): Promise<void> 
     return;
   }
   const body: Record<string, unknown> = { url: webhookUrl };
-  if (webhookSecret) body.secret_token = webhookSecret;
+  if (webhookSecret) {
+    body.secret_token = webhookSecret;
+  } else {
+    console.warn(
+      '[Telegram] TELEGRAM_WEBHOOK_SECRET is not set — /telegram will accept unauthenticated ' +
+      'posts, guarded only by the chat-ID allowlist. Set it in production.'
+    );
+  }
 
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
