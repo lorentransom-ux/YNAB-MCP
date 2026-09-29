@@ -1,6 +1,6 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { getYnabClient, cachedFetch } from './ynab.js';
-import { toUSDDisplay, findCategoryByName } from './utils.js';
+import { toUSDDisplay, resolveScheduledCategory } from './utils.js';
 import { isTelegramConfigured, sendTelegram } from './telegram.js';
 import { loadConfig, setThresholdState, type Threshold } from './config.js';
 
@@ -13,6 +13,11 @@ const activeAlertTasks = new Map<string, ScheduledTask>();
 // `triggered` dedupe (see checkUserThresholds) ensures the extra frequency does
 // not produce repeat notifications for an already-reported low balance.
 const ALERT_SCHEDULE = '0 */2 * * *';
+
+// "user:category" keys already told their alert category is missing, so a broken
+// alert produces one Telegram notice rather than one every run. In-memory, so a
+// redeploy re-sends it once; cleared when the category resolves again.
+const missingNotified = new Set<string>();
 
 function conditionMet(balanceDollars: number, threshold: Threshold): boolean {
   return threshold.direction === 'at_or_above'
@@ -45,12 +50,27 @@ async function checkUserThresholds(userName: string): Promise<void> {
   const allCategories = response.data.category_groups.flatMap((g) => g.categories);
 
   for (const threshold of user.thresholds) {
-    // Emoji-tolerant: a stored "Coffee Shops" matches YNAB's "☕️ Coffee Shops".
-    const cat = findCategoryByName(allCategories, threshold.category);
+    // Emoji-tolerant ("Coffee Shops" matches "☕️ Coffee Shops"), and a base name
+    // like "Eating Out" resolves to this week's "Eating Out 1st–7th" split.
+    const cat = resolveScheduledCategory(allCategories, threshold.category, user.timezone);
+    const missingKey = `${user.name}:${threshold.category}`;
     if (!cat) {
       console.warn(`[Alerts] Category not found in YNAB for ${user.name}: "${threshold.category}"`);
+      if (!missingNotified.has(missingKey)) {
+        try {
+          await sendTelegram(
+            user.telegramChatId,
+            `⚠️ Your alert for "${threshold.category}" can't run — no YNAB category matches that name. ` +
+            'It may have been renamed or deleted; update or remove the alert.'
+          );
+          missingNotified.add(missingKey);
+        } catch {
+          // sendTelegram already logged; retry the notice next run.
+        }
+      }
       continue;
     }
+    missingNotified.delete(missingKey);
 
     const balanceMilli = cat.balance ?? 0;
     const met = conditionMet(balanceMilli / 1000, threshold);
