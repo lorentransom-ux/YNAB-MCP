@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { loadConfig } from './config.js';
 import { sendTelegram, webhookSecret } from './telegram.js';
@@ -19,11 +20,19 @@ async function sendReply(res: Response, chatId: number, message: string): Promis
   res.sendStatus(200);
 }
 
+// Hash both sides so timingSafeEqual gets equal-length inputs and the comparison
+// time doesn't reveal how much of a forged token was right.
+function secretMatches(input: string, secret: string): boolean {
+  const a = createHash('sha256').update(input).digest();
+  const b = createHash('sha256').update(secret).digest();
+  return timingSafeEqual(a, b);
+}
+
 export async function handleInboundTelegram(req: Request, res: Response): Promise<void> {
   // Verify the request genuinely came from Telegram when a secret is configured.
   if (webhookSecret) {
     const provided = req.header('X-Telegram-Bot-Api-Secret-Token');
-    if (provided !== webhookSecret) {
+    if (!secretMatches(provided ?? '', webhookSecret)) {
       console.warn('[Telegram Chat] Rejected webhook with missing/invalid secret token');
       res.sendStatus(401);
       return;
