@@ -1,0 +1,20 @@
+# Compile on every PR and push to main so a type error is caught before Railway
+# deploys it. Node version matches the runtime image (node:22-slim in the Dockerfile).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
