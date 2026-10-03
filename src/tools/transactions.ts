@@ -21,6 +21,22 @@ const MAX_BULK_UPDATES = 100;
 const AMOUNT_DESC =
   'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
 
+// Some MCP clients keep an old copy of a tool's schema after the server changes
+// it. A client that does not know a field is an array sends it as a JSON string,
+// which would otherwise fail with "Expected array, received string". Accept that
+// form too. The published schema is still an array, and a string that is not
+// valid JSON still fails validation.
+function jsonArray<T extends z.ZodTypeAny>(array: T) {
+  return z.preprocess((value) => {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }, array);
+}
+
 const splitLineSchema = z.object({
   amount: z.number().describe(AMOUNT_DESC),
   category_id: z.string().describe(
@@ -325,12 +341,12 @@ export function registerTransactionTools(server: McpServer): void {
         category_id: z.string().optional().describe(
           'Category ID (from ynab_get_categories). Omit for transfers, splits, and to leave a transaction uncategorized.'
         ),
-        subtransactions: z.array(splitLineSchema).optional().describe(
+        subtransactions: jsonArray(z.array(splitLineSchema)).optional().describe(
           'Split lines for a multi-category transaction. Omit category_id on the parent. At least two lines; amounts must sum to amount.'
         ),
         memo: z.string().optional().describe('Optional memo.'),
         cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
-        approved: z.boolean().optional().describe('Whether the transaction is approved. Defaults to true for API-created transactions.'),
+        approved: z.boolean().optional().describe('Whether the transaction is approved. If omitted, YNAB leaves the new transaction UNAPPROVED; pass true to approve it.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
       },
     },
@@ -429,7 +445,7 @@ export function registerTransactionTools(server: McpServer): void {
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
         category_id: z.string().optional().describe('New category ID (from ynab_get_categories). Cannot change the category of an existing split. Omit when passing subtransactions.'),
-        subtransactions: z.array(splitLineSchema).optional().describe(
+        subtransactions: jsonArray(z.array(splitLineSchema)).optional().describe(
           'Split lines that turn an unsplit transaction into a split. At least two lines; amounts ' +
           'must add up to the transaction amount (same sign). Not allowed on a transaction that is already split.'
         ),
@@ -535,24 +551,26 @@ export function registerTransactionTools(server: McpServer): void {
         'Returns the updated transactions.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-        transactions: z
-          .array(
-            z.object({
-              transaction_id: z.string().describe('The transaction to update.'),
-              account_id: z.string().optional().describe('Move the transaction to a different account.'),
-              date: z.string().optional().describe('New date (YYYY-MM-DD).'),
-              amount: z.number().optional().describe(AMOUNT_DESC),
-              payee_id: z.string().optional().describe('New payee ID.'),
-              payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
-              category_id: z.string().optional().describe('New category ID. Cannot change the category of an existing split.'),
-              memo: z.string().optional().describe('New memo.'),
-              cleared: clearedSchema.optional().describe('New cleared status.'),
-              approved: z.boolean().optional().describe('Set true to approve.'),
-              flag_color: flagColorSchema.optional().describe('New flag color.'),
-            })
-          )
-          .min(1)
-          .max(MAX_BULK_UPDATES)
+        transactions: jsonArray(
+          z
+            .array(
+              z.object({
+                transaction_id: z.string().describe('The transaction to update.'),
+                account_id: z.string().optional().describe('Move the transaction to a different account.'),
+                date: z.string().optional().describe('New date (YYYY-MM-DD).'),
+                amount: z.number().optional().describe(AMOUNT_DESC),
+                payee_id: z.string().optional().describe('New payee ID.'),
+                payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
+                category_id: z.string().optional().describe('New category ID. Cannot change the category of an existing split.'),
+                memo: z.string().optional().describe('New memo.'),
+                cleared: clearedSchema.optional().describe('New cleared status.'),
+                approved: z.boolean().optional().describe('Set true to approve.'),
+                flag_color: flagColorSchema.optional().describe('New flag color.'),
+              })
+            )
+            .min(1)
+            .max(MAX_BULK_UPDATES)
+        )
           .describe('The transactions to update.'),
       },
     },
