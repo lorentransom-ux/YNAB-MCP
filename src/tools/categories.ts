@@ -2,7 +2,15 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Category, SaveCategoryResponse } from 'ynab';
 import { ynabRead, ynabWrite, cachedFetch, ynabApiJson } from '../ynab.js';
-import { toUSD, toMilliunits, buildGoalFields, resolveMonth } from '../utils.js';
+import {
+  toUSD,
+  toMilliunits,
+  buildGoalFields,
+  resolveMonth,
+  resolveCategoryQuery,
+  dayOfMonthInTz,
+} from '../utils.js';
+import { loadConfig } from '../config.js';
 
 const GOAL_FREQUENCY = ['monthly', 'weekly', 'yearly'] as const;
 type GoalFrequency = (typeof GOAL_FREQUENCY)[number];
@@ -78,6 +86,9 @@ const goalNeedsWholeUpdateSchema = z
       'Pass null to clear it.'
   );
 
+// Cap on how many candidate names an ambiguous/no-match error lists.
+const MAX_CANDIDATES = 10;
+
 export function mapCategory(cat: Category, groupName?: string) {
   return {
     id: cat.id,
@@ -125,7 +136,8 @@ export function registerCategoryTools(server: McpServer): void {
     'ynab_get_categories',
     {
       description:
-        'Get all category groups and their categories. ' +
+        'Get all category groups and their categories. This is a large response (every category); ' +
+        'to read one category\'s budgeted amount, activity, or balance, use ynab_get_category instead. ' +
         'Accepts an optional month param (YYYY-MM-01 or "current") to return data for that month. ' +
         'Includes budgeted, activity, and balance amounts, plus goal information for each category.',
       inputSchema: {
@@ -162,6 +174,120 @@ export function registerCategoryTools(server: McpServer): void {
               .filter((c) => !c.deleted)
               .map((c) => mapCategory(c, g.name))
           );
+      })
+  );
+
+  server.registerTool(
+    'ynab_get_category',
+    {
+      description:
+        'Get ONE category: budgeted, activity, balance, and goal info. Prefer this over ' +
+        'ynab_get_categories whenever the question is about a single category (e.g. "how much is ' +
+        'left in Eating Out?"). Pass a loosely worded name; emoji and capitalization are ignored and ' +
+        'partial names work ("coffee" finds "Coffee Shops"). Categories split by day-of-month range ' +
+        '(e.g. "Eating Out 1st–7th", "Eating Out 8th–15th") resolve to the split covering today; ' +
+        'put a day number in the name ("eating out 10") or pass day to pick another split. The ' +
+        'other splits are listed in related_categories. If the name matches several unrelated ' +
+        'categories, or none, the call fails with the candidate names and IDs so you can retry — ' +
+        'it never guesses.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        name: z.string().optional().describe(
+          'Category name, loosely worded (e.g. "eating out", "coffee", "groceries 8th"). ' +
+          'Provide this or category_id.'
+        ),
+        category_id: z.string().optional().describe(
+          'Exact category ID. Takes precedence over name when both are given.'
+        ),
+        month: z.string().optional().describe(
+          'Month in YYYY-MM-01 format, or "current". Defaults to the current month.'
+        ),
+        day: z.number().int().min(1).max(31).optional().describe(
+          'Day of month used to choose between day-range splits. Defaults to today.'
+        ),
+      },
+    },
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
+        const name = args.name?.trim();
+        if (!args.category_id && !name) {
+          throw new Error('Provide either name or category_id.');
+        }
+
+        // Resolve against the full list server-side so only one category is returned.
+        type Row = Category & { groupName?: string };
+        let rows: Row[];
+        if (args.month) {
+          const resolvedMonth = resolveMonth(args.month);
+          const response = await cachedFetch(
+            `month:${planId}:${resolvedMonth}`,
+            () => api.months.getPlanMonth(planId, resolvedMonth)
+          );
+          rows = response.data.month.categories.map((c) => ({
+            ...c,
+            groupName: c.category_group_name,
+          }));
+        } else {
+          const response = await cachedFetch(
+            `categories:${planId}`,
+            () => api.categories.getCategories(planId)
+          );
+          rows = response.data.category_groups.flatMap((g) =>
+            g.categories.map((c) => ({ ...c, groupName: g.name }))
+          );
+        }
+
+        const describe = (list: Row[]) =>
+          list
+            .slice(0, MAX_CANDIDATES)
+            .map((c) => `"${c.name}" (id ${c.id})`)
+            .join('; ') +
+          (list.length > MAX_CANDIDATES ? `; and ${list.length - MAX_CANDIDATES} more` : '');
+
+        if (args.category_id) {
+          const byId = rows.find((c) => c.id === args.category_id && !c.deleted);
+          if (!byId) {
+            throw new Error(
+              `No category with id ${args.category_id}. Retry with name, or look the ID up with ynab_get_categories.`
+            );
+          }
+          return { ...mapCategory(byId, byId.groupName), matched_by: 'category_id' };
+        }
+
+        const timeZone = loadConfig().users[0]?.timezone ?? 'UTC';
+        const today = args.day ?? dayOfMonthInTz(timeZone);
+        const result = resolveCategoryQuery(rows, name!, today);
+
+        if (result.kind === 'none') {
+          throw new Error(
+            `No category matches "${name}".` +
+              (result.suggestions.length > 0
+                ? ` Closest: ${describe(result.suggestions)}. Retry with one of these names or IDs.`
+                : ' Call ynab_get_category_groups or ynab_get_categories to see what exists.')
+          );
+        }
+        if (result.kind === 'ambiguous') {
+          throw new Error(
+            `"${name}" matches ${result.candidates.length} categories: ${describe(result.candidates)}. ` +
+              'Retry with a more specific name or a category_id.'
+          );
+        }
+
+        const c = result.category;
+        return {
+          ...mapCategory(c, c.groupName),
+          matched_by: result.via,
+          ...(result.via === 'day_range' && {
+            selected_for_day: result.day,
+            related_categories: result.siblings.map((s) => ({
+              id: s.id,
+              name: s.name,
+              budgeted: toUSD(s.budgeted),
+              activity: toUSD(s.activity),
+              balance: toUSD(s.balance),
+            })),
+          }),
+        };
       })
   );
 

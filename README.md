@@ -4,7 +4,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-27 budget tools — 13 read, 14 write — all accessible via Claude chat.
+28 budget tools — 14 read, 14 write — all accessible via Claude chat.
 
 **Read tools:**
 
@@ -13,6 +13,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_plans` | List all budgets with IDs and names |
 | `ynab_get_accounts` | All accounts with balances, types, and `transfer_payee_id` (needed for transfers) |
 | `ynab_get_categories` | Category groups and categories with goal info |
+| `ynab_get_category` | One category by loose name or ID — budgeted, activity, balance, goal info. Resolves day-range splits (e.g. `Eating Out 8th–15th`) to the one covering today; fails with candidates when the name is ambiguous |
 | `ynab_get_months` | All budget months with income/budgeted/activity totals |
 | `ynab_get_month_detail` | Full category breakdown for a specific month |
 | `ynab_get_transactions` | All transactions with optional date filters; includes `flag_color`, `flag_name`, and `subtransactions` on splits |
