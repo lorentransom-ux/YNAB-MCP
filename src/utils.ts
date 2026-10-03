@@ -258,6 +258,13 @@ export interface GoalFields {
   goal_snoozed_at: string | null;
 }
 
+// Drops null/undefined values so responses carry only fields that have data.
+export function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, v]) => v !== null && v !== undefined)
+  ) as Partial<T>;
+}
+
 export function buildGoalFields(cat: Category): GoalFields {
   const gt = cat.goal_type;
   const target = toUSD(cat.goal_target);
@@ -275,6 +282,14 @@ export function buildGoalFields(cat: Category): GoalFields {
   } else if (gt === 'NEED') {
     const style = cat.goal_needs_whole_amount ? 'Set Aside' : 'Refill';
     goal_summary = `Spend ${target} per period (${style})`;
+  } else if (gt === 'DEBT') {
+    // Loan-paired categories (mortgage, auto loan). The target is the payment.
+    if (cat.goal_target != null && cat.goal_target > 0) {
+      const period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
+      goal_summary = `Debt payment of ${target} every ${period}`;
+    } else {
+      goal_summary = 'Debt payment goal (YNAB returned no target amount)';
+    }
   } else {
     goal_summary = `Unknown goal type: ${gt}`;
   }

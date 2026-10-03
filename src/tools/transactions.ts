@@ -1,12 +1,22 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { ynabRead, ynabWrite, cachedFetch } from '../ynab.js';
-import { toUSD, toMilliunits, daysAgo, DEFAULT_SINCE_DAYS } from '../utils.js';
-import type { TransactionDetail, HybridTransaction, ExistingTransaction, Payee } from 'ynab';
+import { toUSD, toMilliunits, daysAgo, resolveMonth, compact, DEFAULT_SINCE_DAYS } from '../utils.js';
+import type {
+  TransactionDetail,
+  HybridTransaction,
+  ExistingTransaction,
+  SaveTransactionWithIdOrImportId,
+  Payee,
+} from 'ynab';
 
 // Shared enums for transaction write tools, matching the YNAB API's values.
 const clearedSchema = z.enum(['cleared', 'uncleared', 'reconciled']);
 const flagColorSchema = z.enum(['red', 'orange', 'yellow', 'green', 'blue', 'purple']);
+const transactionTypeSchema = z.enum(['uncategorized', 'unapproved']);
+
+// Most transactions one ynab_update_transactions call will send to YNAB.
+const MAX_BULK_UPDATES = 100;
 
 const AMOUNT_DESC =
   'Amount in dollars. Negative for outflows/spending (e.g. -12.34), positive for inflows.';
@@ -94,29 +104,97 @@ export function registerTransactionTools(server: McpServer): void {
         'Returns payee name, category name, account name, amount, date, memo, cleared status, ' +
         'flag_color, and flag_name (custom name on that flag, if any). ' +
         'Split transactions include a subtransactions array (each line has amount and category). ' +
-        `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
+        'A full month can be a large response; to keep it small, pass type ("unapproved" or ' +
+        '"uncategorized") to get only the transactions that still need attention, or use ' +
+        'ynab_get_transactions_by_category / _by_payee / _by_account. ' +
+        'Pass month to get one budget month. ' +
+        `When neither month nor since_date is given, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        month: z.string().optional().describe(
+          'Return only this budget month: YYYY-MM-01 format, or "current". ' +
+          'since_date and until_date can narrow it further.'
+        ),
+        type: transactionTypeSchema.optional().describe(
+          'Return only "unapproved" or only "uncategorized" transactions.'
+        ),
         since_date: z.string().optional().describe(
           'Return only transactions on or after this date (YYYY-MM-DD). ' +
-          `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
+          `Defaults to ${DEFAULT_SINCE_DAYS} days ago when month is not given.`
         ),
         until_date: z.string().optional().describe(
-          'Return only transactions on or before this date (YYYY-MM-DD). Filtered client-side.'
+          'Return only transactions on or before this date (YYYY-MM-DD).'
         ),
       },
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
+        const keep = (t: TransactionDetail) =>
+          !t.deleted && (!args.until_date || t.date <= args.until_date);
+
+        if (args.month) {
+          // GET /plans/{id}/months/{month}/transactions
+          const month = resolveMonth(args.month);
+          const response = await cachedFetch(
+            `transactions_month:${planId}:${month}:${args.since_date ?? ''}:${args.until_date ?? ''}:${args.type ?? ''}`,
+            () =>
+              api.transactions.getTransactionsByMonth(
+                planId,
+                month,
+                args.since_date,
+                args.until_date,
+                args.type
+              )
+          );
+          return response.data.transactions.filter(keep).map(mapTransaction);
+        }
+
         const sinceDate = args.since_date ?? daysAgo(DEFAULT_SINCE_DAYS);
+        if (args.type) {
+          const response = await cachedFetch(
+            `transactions:${planId}:${sinceDate}:${args.until_date ?? ''}:${args.type}`,
+            () => api.transactions.getTransactions(planId, sinceDate, args.until_date, args.type)
+          );
+          return response.data.transactions.filter(keep).map(mapTransaction);
+        }
+
         const response = await cachedFetch(
           `transactions:${planId}:${sinceDate}`,
           () => api.transactions.getTransactions(planId, sinceDate)
         );
-        return response.data.transactions
-          .filter((t) => !t.deleted && (!args.until_date || t.date <= args.until_date!))
-          .map(mapTransaction);
+        return response.data.transactions.filter(keep).map(mapTransaction);
+      })
+  );
+
+  server.registerTool(
+    'ynab_get_transaction',
+    {
+      description:
+        'Get ONE transaction by ID, with its account, payee, and category IDs. Use it to follow ' +
+        'an ID another tool returned: the other side of a transfer (transfer_transaction_id), the ' +
+        'parent of a split line, or a transaction you just created or updated.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        transaction_id: z.string().describe('The transaction ID.'),
+      },
+    },
+    async (args) =>
+      ynabRead(args, async (api, planId) => {
+        // GET /plans/{id}/transactions/{transaction_id}
+        const response = await api.transactions.getTransactionById(planId, args.transaction_id);
+        const t = response.data.transaction;
+        return {
+          ...mapTransaction(t),
+          ...compact({
+            deleted: t.deleted ? true : undefined,
+            account_id: t.account_id,
+            payee_id: t.payee_id,
+            category_id: t.category_id,
+            transfer_transaction_id: t.transfer_transaction_id,
+            matched_transaction_id: t.matched_transaction_id,
+          }),
+        };
       })
   );
 
@@ -375,6 +453,92 @@ export function registerTransactionTools(server: McpServer): void {
           { transaction }
         );
         return mapTransaction(response.data.transaction);
+      })
+  );
+
+  server.registerTool(
+    'ynab_update_transactions',
+    {
+      description:
+        'Update SEVERAL existing transactions in one call (e.g. approve, recategorize, or re-memo ' +
+        'a batch while reconciling). Each item needs transaction_id plus at least one field to ' +
+        'change; only the provided fields are changed. For a single transaction use ' +
+        `ynab_update_transaction. At most ${MAX_BULK_UPDATES} per call. Cannot add or change splits. ` +
+        'Fails with the list of IDs if YNAB does not confirm every transaction. ' +
+        'Returns the updated transactions.',
+      inputSchema: {
+        plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        transactions: z
+          .array(
+            z.object({
+              transaction_id: z.string().describe('The transaction to update.'),
+              account_id: z.string().optional().describe('Move the transaction to a different account.'),
+              date: z.string().optional().describe('New date (YYYY-MM-DD).'),
+              amount: z.number().optional().describe(AMOUNT_DESC),
+              payee_id: z.string().optional().describe('New payee ID.'),
+              payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
+              category_id: z.string().optional().describe('New category ID. Cannot change the category of an existing split.'),
+              memo: z.string().optional().describe('New memo.'),
+              cleared: clearedSchema.optional().describe('New cleared status.'),
+              approved: z.boolean().optional().describe('Set true to approve.'),
+              flag_color: flagColorSchema.optional().describe('New flag color.'),
+            })
+          )
+          .min(1)
+          .max(MAX_BULK_UPDATES)
+          .describe('The transactions to update.'),
+      },
+    },
+    async (args) =>
+      ynabWrite(args, async (api, planId) => {
+        const ids = args.transactions.map((t) => t.transaction_id);
+        const repeated = ids.filter((id, i) => ids.indexOf(id) !== i);
+        if (repeated.length > 0) {
+          throw new Error(
+            `transaction_id listed more than once: ${[...new Set(repeated)].join(', ')}. Nothing was updated.`
+          );
+        }
+
+        const transactions: SaveTransactionWithIdOrImportId[] = args.transactions.map((t) => {
+          const fields = {
+            ...(t.account_id !== undefined && { account_id: t.account_id }),
+            ...(t.date !== undefined && { date: t.date }),
+            ...(t.amount !== undefined && { amount: toMilliunits(t.amount) }),
+            ...(t.payee_id !== undefined && { payee_id: t.payee_id }),
+            ...(t.payee_name !== undefined && { payee_name: t.payee_name }),
+            ...(t.category_id !== undefined && { category_id: t.category_id }),
+            ...(t.memo !== undefined && { memo: t.memo }),
+            ...(t.cleared !== undefined && { cleared: t.cleared }),
+            ...(t.approved !== undefined && { approved: t.approved }),
+            ...(t.flag_color !== undefined && { flag_color: t.flag_color }),
+          };
+          if (Object.keys(fields).length === 0) {
+            throw new Error(
+              `Transaction ${t.transaction_id} has no fields to change. Nothing was updated.`
+            );
+          }
+          return { id: t.transaction_id, ...fields };
+        });
+
+        // PATCH /plans/{id}/transactions
+        const response = await api.transactions.updateTransactions(planId, { transactions });
+
+        // Confirm YNAB reported every requested transaction as saved.
+        const saved = new Set(response.data.transaction_ids);
+        const missing = ids.filter((id) => !saved.has(id));
+        if (missing.length > 0) {
+          throw new Error(
+            `YNAB confirmed ${ids.length - missing.length} of ${ids.length} updates. ` +
+              `NOT confirmed: ${missing.join(', ')}. The confirmed ones were saved; ` +
+              'check the unconfirmed IDs with ynab_get_transaction.'
+          );
+        }
+
+        const returned = response.data.transactions ?? [];
+        return {
+          updated: ids.length,
+          transactions: returned.map((t) => compact(mapTransaction(t))),
+        };
       })
   );
 
