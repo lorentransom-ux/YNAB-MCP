@@ -60,7 +60,8 @@ export function registerMovementTools(server: McpServer): void {
       description:
         'Get money moved between CATEGORIES, or between a category and Ready to Assign, in the ' +
         'budget (YNAB "money movements"). Each movement has the amount, the from and to category ' +
-        'names, when it was moved, and any note. A whole month can be over a hundred movements, ' +
+        'names, when it was moved, any note, and the group_id of the action that made it (movements ' +
+        'sharing a group_id were made together; no group_id means it was moved on its own). A whole month can be over a hundred movements, ' +
         'so pass category whenever the question is about one category (e.g. "where did Eating ' +
         'Out get its money?"): only movements into or out of it are returned. category is a ' +
         'loose name; "eating out" covers every "Eating Out ..." split, and "ready to assign" ' +
@@ -137,17 +138,19 @@ export function registerMovementTools(server: McpServer): void {
           }
         }
 
-        // Rows carry only what a model reads. The month is stated once at the top
-        // unless the request spans every month; movement and group IDs are omitted
-        // because no tool takes them.
-        const mapMovement = (m: MoneyMovement, withMovedAt: boolean) =>
+        // The month is stated once at the top unless the request spans every month.
+        // The movement's own ID is omitted because no tool or endpoint takes it.
+        // group_id is kept in full so it is never ambiguous which movements were
+        // made together: on each row in the flat list, on each group when grouped.
+        const mapMovement = (m: MoneyMovement, withGroupId: boolean) =>
           compact({
             ...(all && { month: m.month }),
-            ...(withMovedAt && { moved_at: m.moved_at }),
+            moved_at: m.moved_at,
             amount: toUSD(m.amount),
             from: label(m.from_category_id),
             to: label(m.to_category_id),
             note: m.note || undefined,
+            ...(withGroupId && { group_id: m.money_movement_group_id }),
           });
 
         const header = {
@@ -186,6 +189,7 @@ export function registerMovementTools(server: McpServer): void {
             .filter(({ members }) => members.length > 0)
             .map(({ g, members }) =>
               compact({
+                group_id: g.id,
                 created_at: g.group_created_at,
                 ...(all && { month: g.month }),
                 note: g.note || undefined,
