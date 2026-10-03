@@ -105,7 +105,7 @@ export function registerScheduledTools(server: McpServer): void {
         payee_id: z.string().optional().describe('Existing payee ID. Prefer payee_name unless the ID is known.'),
         payee_name: z.string().optional().describe('Payee name. Matched to an existing payee or created.'),
         category_id: z.string().optional().describe(
-          'Category ID (from ynab_get_categories). Omit to leave uncategorized.'
+          'Category ID (from ynab_get_category). Omit to leave uncategorized.'
         ),
         memo: z.string().optional().describe('Optional memo.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
@@ -148,7 +148,7 @@ export function registerScheduledTools(server: McpServer): void {
         frequency: frequencySchema.optional().describe('New repeat frequency.'),
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('New category ID (from ynab_get_categories).'),
+        category_id: z.string().optional().describe('New category ID (from ynab_get_category).'),
         memo: z.string().optional().describe('New memo.'),
         flag_color: flagColorSchema.optional().describe('New flag color.'),
       },

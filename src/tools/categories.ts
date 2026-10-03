@@ -324,7 +324,7 @@ export function registerCategoryTools(server: McpServer): void {
     {
       description:
         'Create a new category in a category group. Required: name and category_group_id ' +
-        '(from ynab_get_categories or ynab_create_category_group). Optionally set a goal ' +
+        '(from ynab_get_category_groups or ynab_create_category_group). Optionally set a goal ' +
         'target (goal_target, goal_target_date, goal_needs_whole_amount, goal_frequency). ' +
         'goal_frequency requires goal_target, cannot be combined with goal_target_date, and ' +
         'is not supported for Credit Card Payment categories. This does NOT assign budgeted ' +
@@ -378,7 +378,7 @@ export function registerCategoryTools(server: McpServer): void {
         'Payment categories. Returns the updated category.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-        category_id: z.string().describe('The category to update (from ynab_get_categories).'),
+        category_id: z.string().describe('The category to update (from ynab_get_category).'),
         name: z.string().optional().describe('New category name.'),
         note: z.string().nullable().optional().describe('New category note. Pass null to clear it.'),
         category_group_id: z.string().optional().describe('Move the category to a different category group.'),
@@ -440,7 +440,7 @@ export function registerCategoryTools(server: McpServer): void {
         'Returns the updated category group (id, name, hidden).',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-        category_group_id: z.string().describe('The category group to update (from ynab_get_categories).'),
+        category_group_id: z.string().describe('The category group to update (from ynab_get_category_groups).'),
         name: z.string().max(50).describe('The new category group name (max 50 characters).'),
       },
     },

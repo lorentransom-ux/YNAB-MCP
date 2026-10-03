@@ -12,10 +12,10 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 |------|-------------|
 | `ynab_get_plans` | List all budgets with IDs and names |
 | `ynab_get_accounts` | All accounts with balances, types, and `transfer_payee_id` (needed for transfers) |
-| `ynab_get_categories` | Category groups and categories with goal info |
+| `ynab_get_categories` | Every category group and category with goal info. Large response (tens of thousands of characters on a full budget); use `ynab_get_category` for a single category |
 | `ynab_get_category` | One category by loose name or ID — budgeted, activity, balance, goal info. Resolves day-range splits (e.g. `Eating Out 8th–15th`) to the one covering today; fails with candidates when the name is ambiguous |
 | `ynab_get_months` | All budget months with income/budgeted/activity totals |
-| `ynab_get_month_detail` | Full category breakdown for a specific month |
+| `ynab_get_month_detail` | Full category breakdown for a specific month. Large response; use `ynab_get_category` with `month` for a single category |
 | `ynab_get_transactions` | Transactions with optional `month`, `type` (`unapproved` / `uncategorized`), and date filters; includes `flag_color`, `flag_name`, and `subtransactions` on splits |
 | `ynab_get_transaction` | One transaction by ID, with its account, payee, and category IDs |
 | `ynab_get_transactions_by_account` | Transactions for a specific account (includes flags) |
@@ -31,8 +31,8 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 | Tool | Description |
 |------|-------------|
-| `ynab_create_transaction` | Add a transaction, a linked transfer via `transfer_payee_id`, or a multi-category split via `subtransactions` |
-| `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction (cannot add splits to an existing one) |
+| `ynab_create_transaction` | Add a transaction, a linked transfer via `transfer_payee_id`, or a multi-category split via `subtransactions`. Approved by default |
+| `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction, or turn an unsplit transaction into a split via `subtransactions` (the lines of an existing split cannot be changed) |
 | `ynab_update_transactions` | Update several transactions in one call; fails with the IDs if YNAB does not confirm every one |
 | `ynab_delete_transaction` | Delete a transaction |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
@@ -48,22 +48,28 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_create_category_group` | Create a category group (name, max 50 characters) |
 | `ynab_update_category_group` | Rename a category group |
 
-Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. Categories and category groups can be created, and goal targets can be set or updated (`goal_target`, `goal_target_date`, `goal_needs_whole_amount`, `goal_frequency`); use `ynab_get_category_groups` to get the `category_group_id` these need. The YNAB API still cannot create or delete a plan (budget) and still cannot delete accounts, so those remain app-only. It also cannot add or edit splits on an *existing* (already imported) transaction, and cannot create split *scheduled* transactions at all — those still have to be split in the YNAB app.
+Write tools take amounts in dollars (negative = outflow) and convert to YNAB milliunits internally. Categories and category groups can be created, and goal targets can be set or updated (`goal_target`, `goal_target_date`, `goal_needs_whole_amount`, `goal_frequency`); use `ynab_get_category_groups` to get the `category_group_id` these need. The YNAB API still cannot create or delete a plan (budget), cannot delete accounts, and cannot delete payees, so those remain app-only. It cannot change the lines of a transaction that is *already* a split, and cannot create split *scheduled* transactions at all — those still have to be edited in the YNAB app.
+
+New transactions are **approved by default**. YNAB itself leaves a transaction unapproved when the field is omitted, so `ynab_create_transaction` sends `approved: true` unless the caller passes `false`.
 
 ### Split transactions (multiple categories)
 
 To create a new split (for example a Rouse's trip that is part groceries, part household supplies):
 
-1. Look up category IDs with `ynab_get_categories`.
+1. Look up each category ID with `ynab_get_category` (one small call per category; `ynab_get_categories` returns the whole budget).
 2. Call `ynab_create_transaction` with the total `amount`, **omit** `category_id`, and pass `subtransactions`: at least two lines, each with `amount` (same sign as the parent) and `category_id`. Line amounts must add up to `amount`. Optional per-line `memo`.
 
 Example: a $47.20 outflow, $32.10 groceries and $15.10 supplies — `amount: -47.20` and two lines `-32.10` / `-15.10`.
 
 Reads (`ynab_get_transactions` and the filtered variants) return a `subtransactions` array on split transactions.
 
-Splits are **create-only, and only on regular transactions**. The YNAB API has no `subtransactions` field on `SaveScheduledTransaction`, so `ynab_create_scheduled_transaction` takes a single `category_id` — to get a recurring split, create the scheduled transaction here and split its occurrences in the YNAB app. `ynab_get_scheduled_transactions` still returns `subtransactions` for scheduled splits that already exist.
+**Splitting a transaction that already exists.** Call `ynab_update_transaction` with `transaction_id` and `subtransactions` (same shape as above), and omit `category_id`. The tool reads the transaction first and refuses, before writing anything, a transaction that is already a split, lines that do not add up to its amount, or fewer than two lines. If YNAB accepts the request but does not apply the split, the call fails and puts the original category back.
 
-The public API will not convert an already-imported bank transaction into a split. For those, split in the YNAB app (or delete and recreate, which drops the bank match).
+This was verified against live YNAB on a transaction created through the API. It has **not** been verified on a bank-imported transaction; YNAB's spec makes no exception for imports. A split cannot be undone through the API, so try it first on an import you do want split.
+
+The lines of a transaction that is **already a split cannot be changed** through the API (the spec: "Updating `subtransactions` on an existing split transaction is not supported and will return an error"). Edit those in the YNAB app.
+
+Scheduled transactions cannot be split through the API at all: there is no `subtransactions` field on `SaveScheduledTransaction`, so `ynab_create_scheduled_transaction` takes a single `category_id`. To get a recurring split, create the scheduled transaction here and split its occurrences in the YNAB app. `ynab_get_scheduled_transactions` still returns `subtransactions` for scheduled splits that already exist.
 
 ### Account-to-account transfers
 
@@ -76,7 +82,29 @@ A `payee_name` like `Transfer : Checking` is resolved to that existing transfer 
 
 ### Transaction flags
 
-List/get responses (`ynab_get_transactions`, by account/payee/category, and `ynab_get_money_transfers`) include `flag_color` (`red` / `orange` / `yellow` / `green` / `blue` / `purple`) and `flag_name` (the custom name on that flag, if any). `ynab_create_transaction` and `ynab_update_transaction` can set `flag_color`; a later get returns both fields. Merchant order-history URLs are not in the YNAB REST API and are not exposed here.
+List/get responses (`ynab_get_transactions`, `ynab_get_transaction`, by account/payee/category, and `ynab_get_money_transfers`) include `flag_color` (`red` / `orange` / `yellow` / `green` / `blue` / `purple`) and `flag_name` (the custom name on that flag, if any). `ynab_create_transaction`, `ynab_update_transaction`, and `ynab_update_transactions` can set `flag_color`; a later get returns both fields. Merchant order-history URLs are not in the YNAB REST API and are not exposed here.
+
+### Category goals
+
+Category reads include a `goal_summary` string. Its forms are:
+
+| `goal_summary` | Meaning |
+|---|---|
+| `No goal` | The category has no target |
+| `Target balance of $X` | Have X in the category |
+| `Target balance of $X by DATE` | Have X in the category by a date |
+| `Fund $X every PERIOD` | Assign X each period (month, N months, week, year) |
+| `Spend $X per period (Refill)` | Refill up to X each period |
+| `Spend $X per period (Set Aside)` | Set aside another X each period |
+| `Debt payment of $X every PERIOD` | Loan-paired category (mortgage, auto loan); X is the payment |
+| `Debt payment goal (YNAB returned no target amount)` | Loan-paired category for which YNAB sent no amount |
+| `Unknown goal type: TYPE` | A goal type this server does not recognize yet |
+
+Anything that parses these strings should treat a form it does not recognize as a gap to report, not a category to skip.
+
+### Money movements: budget month vs. date moved
+
+`ynab_get_category_money_movements` has two different notions of time. `month` is the **budget month the money belongs to**, which is how YNAB's API scopes movements; October's budget is often funded in September. `moved_since` / `moved_until` filter by **the date the move was made**, in the budget owner's timezone, and search every budget month when `month` is omitted. Every response reports `total_in_period` (movements before any filter), `count` (movements returned), and `action_count` (distinct actions, where a group counts once), and each grouped movement carries its full `group_id`.
 
 Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, can ask plain-English budget questions any time, and can adjust their own digest settings just by chatting — no phone number, carrier registration, or 10DLC required.
 
@@ -247,7 +275,7 @@ Times are interpreted in the user's `TIMEZONE`. Use any [IANA timezone name](htt
 
 ### Category Names
 
-`USER_CATEGORIES` is a comma-separated list of YNAB category names, spelled exactly as they appear in your budget (case-insensitive). Each user gets their own list — the balance shown is the remaining balance for the current month.
+`USER_CATEGORIES` is a comma-separated list of YNAB category names. Matching is forgiving: case and emoji are ignored, so `Coffee Shops` matches `☕️ Coffee Shops`. A name that matches a set of day-range categories (for example `Eating Out` when the budget has `Eating Out 1st–7th`, `Eating Out 8th–15th`, ...) resolves to the one covering today in that user's timezone. Each user gets their own list — the balance shown is the remaining balance for the current month.
 
 ### Security notes
 
@@ -346,7 +374,10 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 - **Amounts**: All monetary values returned in dollars (milliunits ÷ 1000), never raw integers
 - **Default budget**: All tools default to `last-used` so you don't need to specify a plan ID
 - **Transfers**: Accounts include `transfer_payee_id`; create a linked transfer with that id as `payee_id` and no `category_id`
-- **Splits**: Create with `subtransactions` (omit parent `category_id`); reads return split lines. Existing imports cannot be split via the API
+- **Splits**: Create with `subtransactions` (omit parent `category_id`), or split an existing unsplit transaction with `ynab_update_transaction`; reads return split lines. The lines of an existing split cannot be changed via the API
+- **Approval**: `ynab_create_transaction` approves new transactions unless `approved: false` is passed; YNAB's own default is unapproved
+- **Response size**: MCP clients truncate large tool results, so single-item and filtered reads exist alongside the full lists (`ynab_get_category`, `ynab_get_transaction`, `month` / `type` on `ynab_get_transactions`, `category` and date filters on `ynab_get_category_money_movements`). Prefer them
+- **Stale client schemas**: a client holding an old copy of a tool's schema sends list fields as JSON strings; the list fields on the transaction write tools accept that form as well as arrays
 - **Flags**: Transaction reads pass through `flag_color` and `flag_name`
 - **Scheduler**: Optional background worker (`node-cron`) that fires on configured cron schedules, fetches YNAB category balances, and sends digests via Telegram. Initializes at server startup; silently no-ops if `TELEGRAM_BOT_TOKEN` is absent.
 
@@ -356,7 +387,7 @@ The server starts on port 3000. Check it's running at `http://localhost:3000/hea
 
 - Your YNAB Personal Access Token is only read from the environment — never committed to code
 - The Telegram bot token is environment-only and used outbound only — never in code or logs
-- Write tools mutate the household YNAB budget via the personal access token; they cannot create or delete a plan, or delete accounts
+- Write tools mutate the household YNAB budget via the personal access token; they cannot create or delete a plan, or delete accounts or payees
 - Access requires explicit approval in your browser with `APPROVAL_PASSPHRASE` — unapproved requests are rejected, and approvals are refused entirely if the passphrase isn't set
 - Wrong passphrases are rate-limited (5 per connection attempt, 10 per 15 minutes server-wide), and USER1 gets a Telegram alert on a wrong passphrase or lockout
 - Access and refresh tokens are stored only as SHA-256 hashes; client secrets are stored as issued because the MCP SDK compares them directly, but a secret alone can't obtain a token without the passphrase or a valid refresh token

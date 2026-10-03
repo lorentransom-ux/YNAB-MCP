@@ -40,7 +40,7 @@ function jsonArray<T extends z.ZodTypeAny>(array: T) {
 const splitLineSchema = z.object({
   amount: z.number().describe(AMOUNT_DESC),
   category_id: z.string().describe(
-    'Category ID for this split line (from ynab_get_categories).'
+    'Category ID for this split line (from ynab_get_category).'
   ),
   memo: z.string().optional().describe('Optional memo on this split line.'),
 });
@@ -323,9 +323,9 @@ export function registerTransactionTools(server: McpServer): void {
         'A payee_name like "Transfer : Checking" is resolved to that existing transfer payee. ' +
         'To split across categories (groceries + supplies, etc.): omit category_id and pass ' +
         'subtransactions. Each line needs amount (dollars, same sign as the parent) and ' +
-        'category_id. Line amounts must add up to amount. The YNAB API cannot add splits to ' +
-        'an already-imported bank transaction; split those in the YNAB app, or create a new ' +
-        'split here. Returns the created transaction including flag_color, flag_name, and ' +
+        'category_id. Line amounts must add up to amount. To split a transaction that already ' +
+        'exists, use ynab_update_transaction with subtransactions instead of creating a new ' +
+        'one. New transactions are approved unless approved is false. Returns the created transaction including flag_color, flag_name, and ' +
         'subtransactions when split.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
@@ -339,7 +339,7 @@ export function registerTransactionTools(server: McpServer): void {
           'Payee name. Matched to an existing payee or created. Names like "Transfer : AccountName" are resolved to the existing transfer payee and never create a duplicate.'
         ),
         category_id: z.string().optional().describe(
-          'Category ID (from ynab_get_categories). Omit for transfers, splits, and to leave a transaction uncategorized.'
+          'Category ID (from ynab_get_category). Omit for transfers, splits, and to leave a transaction uncategorized.'
         ),
         subtransactions: jsonArray(z.array(splitLineSchema)).optional().describe(
           'Split lines for a multi-category transaction. Omit category_id on the parent. At least two lines; amounts must sum to amount.'
@@ -447,7 +447,7 @@ export function registerTransactionTools(server: McpServer): void {
         amount: z.number().optional().describe(AMOUNT_DESC),
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('New category ID (from ynab_get_categories). Cannot change the category of an existing split. Omit when passing subtransactions.'),
+        category_id: z.string().optional().describe('New category ID (from ynab_get_category). Cannot change the category of an existing split. Omit when passing subtransactions.'),
         subtransactions: jsonArray(z.array(splitLineSchema)).optional().describe(
           'Split lines that turn an unsplit transaction into a split. At least two lines; amounts ' +
           'must add up to the transaction amount (same sign). Not allowed on a transaction that is already split.'
