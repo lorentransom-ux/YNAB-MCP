@@ -187,7 +187,8 @@ export function registerCategoryTools(server: McpServer): void {
         'partial names work ("coffee" finds "Coffee Shops"). Categories split by day-of-month range ' +
         '(e.g. "Eating Out 1st–7th", "Eating Out 8th–15th") resolve to the split covering today; ' +
         'put a day number in the name ("eating out 10") or pass day to pick another split. The ' +
-        'other splits are listed in related_categories. If the name matches several unrelated ' +
+        'other splits are listed by name and ID in related_categories; call again with a ' +
+        'category_id for their figures. If the name matches several unrelated ' +
         'categories, or none, the call fails with the candidate names and IDs so you can retry — ' +
         'it never guesses.',
       inputSchema: {
@@ -214,45 +215,53 @@ export function registerCategoryTools(server: McpServer): void {
           throw new Error('Provide either name or category_id.');
         }
 
-        // Resolve against the full list server-side so only one category is returned.
-        type Row = Category & { groupName?: string };
-        let rows: Row[];
-        if (args.month) {
-          const resolvedMonth = resolveMonth(args.month);
+        // The figures always come from YNAB's single-category endpoint:
+        //   GET /plans/{plan_id}/categories/{category_id}                 (current month)
+        //   GET /plans/{plan_id}/months/{month}/categories/{category_id}  (a given month)
+        const resolvedMonth = args.month ? resolveMonth(args.month) : undefined;
+        const fetchOne = async (categoryId: string): Promise<Category> => {
           const response = await cachedFetch(
-            `month:${planId}:${resolvedMonth}`,
-            () => api.months.getPlanMonth(planId, resolvedMonth)
+            `category:${planId}:${resolvedMonth ?? 'current'}:${categoryId}`,
+            () =>
+              resolvedMonth
+                ? api.categories.getMonthCategoryById(planId, resolvedMonth, categoryId)
+                : api.categories.getCategoryById(planId, categoryId)
           );
-          rows = response.data.month.categories.map((c) => ({
-            ...c,
-            groupName: c.category_group_name,
-          }));
-        } else {
-          const response = await cachedFetch(
-            `categories:${planId}`,
-            () => api.categories.getCategories(planId)
-          );
-          rows = response.data.category_groups.flatMap((g) =>
-            g.categories.map((c) => ({ ...c, groupName: g.name }))
-          );
+          const category = response.data.category;
+          if (category.deleted) {
+            throw new Error(`Category ${categoryId} ("${category.name}") has been deleted.`);
+          }
+          return category;
+        };
+
+        // With an ID there is nothing to resolve: one call to the endpoint.
+        if (args.category_id) {
+          const c = await fetchOne(args.category_id);
+          return { ...mapCategory(c, c.category_group_name), matched_by: 'category_id' };
         }
 
-        const describe = (list: Row[]) =>
+        // The endpoint takes an ID, not a name, so a name is first resolved to an
+        // ID against the category list. The list is used ONLY for names and IDs.
+        const listResponse = await cachedFetch(
+          `categories:${planId}`,
+          () => api.categories.getCategories(planId)
+        );
+        const rows = listResponse.data.category_groups.flatMap((g) =>
+          g.categories.map((c) => ({
+            id: c.id,
+            name: c.name,
+            hidden: c.hidden,
+            deleted: c.deleted,
+            groupName: g.name,
+          }))
+        );
+
+        const describe = (list: { id: string; name: string }[]) =>
           list
             .slice(0, MAX_CANDIDATES)
             .map((c) => `"${c.name}" (id ${c.id})`)
             .join('; ') +
           (list.length > MAX_CANDIDATES ? `; and ${list.length - MAX_CANDIDATES} more` : '');
-
-        if (args.category_id) {
-          const byId = rows.find((c) => c.id === args.category_id && !c.deleted);
-          if (!byId) {
-            throw new Error(
-              `No category with id ${args.category_id}. Retry with name, or look the ID up with ynab_get_categories.`
-            );
-          }
-          return { ...mapCategory(byId, byId.groupName), matched_by: 'category_id' };
-        }
 
         const timeZone = loadConfig().users[0]?.timezone ?? 'UTC';
         const today = args.day ?? dayOfMonthInTz(timeZone);
@@ -273,19 +282,14 @@ export function registerCategoryTools(server: McpServer): void {
           );
         }
 
-        const c = result.category;
+        const c = await fetchOne(result.category.id);
         return {
-          ...mapCategory(c, c.groupName),
+          ...mapCategory(c, c.category_group_name ?? result.category.groupName),
           matched_by: result.via,
           ...(result.via === 'day_range' && {
             selected_for_day: result.day,
-            related_categories: result.siblings.map((s) => ({
-              id: s.id,
-              name: s.name,
-              budgeted: toUSD(s.budgeted),
-              activity: toUSD(s.activity),
-              balance: toUSD(s.balance),
-            })),
+            // Names and IDs only; call again with a category_id for another split's figures.
+            related_categories: result.siblings.map((s) => ({ id: s.id, name: s.name })),
           }),
         };
       })
