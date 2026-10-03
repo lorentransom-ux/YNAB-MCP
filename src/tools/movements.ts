@@ -2,7 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { MoneyMovement } from 'ynab';
 import { ynabRead, cachedFetch } from '../ynab.js';
-import { toUSD, daysAgo, resolveMonth, compact, DEFAULT_SINCE_DAYS } from '../utils.js';
+import {
+  toUSD,
+  daysAgo,
+  resolveMonth,
+  compact,
+  matchCategoriesByWords,
+  DEFAULT_SINCE_DAYS,
+} from '../utils.js';
 
 export function registerMovementTools(server: McpServer): void {
   server.registerTool(
@@ -53,13 +60,20 @@ export function registerMovementTools(server: McpServer): void {
       description:
         'Get money moved between CATEGORIES, or between a category and Ready to Assign, in the ' +
         'budget (YNAB "money movements"). Each movement has the amount, the from and to category ' +
-        'names, when it was moved, and any note. Defaults to the current month; pass month for ' +
-        'another month, or month="all" for the whole history (can be large). Set grouped=true to ' +
-        'nest movements under the single action that made them (e.g. one "cover overspending" ' +
-        'that moved money from several categories). For transfers between ACCOUNTS, use ' +
-        'ynab_get_money_transfers instead.',
+        'names, when it was moved, and any note. A whole month can be over a hundred movements, ' +
+        'so pass category whenever the question is about one category (e.g. "where did Eating ' +
+        'Out get its money?"): only movements into or out of it are returned. category is a ' +
+        'loose name; "eating out" covers every "Eating Out ..." split, and "ready to assign" ' +
+        'works too. Defaults to the current month; pass month for another month, or month="all" ' +
+        'for the whole history. Set grouped=true to nest movements under the single action that ' +
+        'made them (e.g. one assignment that funded several categories). For transfers between ' +
+        'ACCOUNTS, use ynab_get_money_transfers instead.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
+        category: z.string().optional().describe(
+          'Return only movements into or out of this category. Loose name (emoji and ' +
+          'capitalization ignored, partial names work), or "ready to assign".'
+        ),
         month: z.string().optional().describe(
           'Month in YYYY-MM-01 format, "current" (default), or "all" for every month.'
         ),
@@ -81,40 +95,70 @@ export function registerMovementTools(server: McpServer): void {
               ? api.money_movements.getMoneyMovementsByMonth(planId, month)
               : api.money_movements.getMoneyMovements(planId)
         );
-        const movements = movementsResponse.data.money_movements;
+        let movements = movementsResponse.data.money_movements;
+        const totalInPeriod = movements.length;
 
         // The API returns category IDs only; resolve them to names here.
         const categoriesResponse = await cachedFetch(
           `categories:${planId}`,
           () => api.categories.getCategories(planId)
         );
-        const names = new Map<string, string>();
-        for (const g of categoriesResponse.data.category_groups) {
-          for (const c of g.categories) names.set(c.id, c.name);
-        }
+        const categories = categoriesResponse.data.category_groups.flatMap((g) => g.categories);
+        const names = new Map(categories.map((c) => [c.id, c.name]));
         // A missing side is Ready to Assign; an ID with no matching category is
         // reported as such rather than dropped.
         const label = (id: string | null | undefined): string =>
           id == null ? 'Ready to Assign' : names.get(id) ?? `Unknown category (id ${id})`;
 
-        const mapMovement = (m: MoneyMovement, withGroupId: boolean) =>
+        // Optional filter: keep only movements touching the named category.
+        let matched: string[] | undefined;
+        const wanted = args.category?.trim();
+        if (wanted) {
+          if (/^(ready\s+to\s+assign|rta)$/i.test(wanted)) {
+            matched = ['Ready to Assign'];
+            movements = movements.filter(
+              (m) => m.from_category_id == null || m.to_category_id == null
+            );
+          } else {
+            const hits = matchCategoriesByWords(categories, wanted);
+            if (hits.length === 0) {
+              throw new Error(
+                `No category matches "${wanted}". Use ynab_get_category to find the category name, ` +
+                  'or omit category to see every movement.'
+              );
+            }
+            const ids = new Set(hits.map((c) => c.id));
+            matched = hits.map((c) => c.name);
+            movements = movements.filter(
+              (m) =>
+                (m.from_category_id != null && ids.has(m.from_category_id)) ||
+                (m.to_category_id != null && ids.has(m.to_category_id))
+            );
+          }
+        }
+
+        // Rows carry only what a model reads. The month is stated once at the top
+        // unless the request spans every month; movement and group IDs are omitted
+        // because no tool takes them.
+        const mapMovement = (m: MoneyMovement, withMovedAt: boolean) =>
           compact({
-            id: m.id,
-            month: m.month,
-            moved_at: m.moved_at,
+            ...(all && { month: m.month }),
+            ...(withMovedAt && { moved_at: m.moved_at }),
             amount: toUSD(m.amount),
             from: label(m.from_category_id),
             to: label(m.to_category_id),
-            note: m.note,
-            ...(withGroupId && { group_id: m.money_movement_group_id }),
+            note: m.note || undefined,
           });
 
+        const header = {
+          month: month ?? 'all',
+          ...(matched && { category_filter: matched }),
+          count: movements.length,
+          ...(matched && { total_in_period: totalInPeriod }),
+        };
+
         if (!args.grouped) {
-          return {
-            month: month ?? 'all',
-            count: movements.length,
-            money_movements: movements.map((m) => mapMovement(m, true)),
-          };
+          return { ...header, money_movements: movements.map((m) => mapMovement(m, true)) };
         }
 
         // GET /plans/{id}/money_movement_groups  or  /plans/{id}/months/{month}/money_movement_groups
@@ -132,19 +176,22 @@ export function registerMovementTools(server: McpServer): void {
           (m) => m.money_movement_group_id == null || !known.has(m.money_movement_group_id)
         );
         return {
-          month: month ?? 'all',
-          count: movements.length,
-          groups: groups.map((g) =>
-            compact({
-              group_id: g.id,
-              created_at: g.group_created_at,
-              month: g.month,
-              note: g.note,
-              money_movements: movements
-                .filter((m) => m.money_movement_group_id === g.id)
-                .map((m) => mapMovement(m, false)),
-            })
-          ),
+          ...header,
+          groups: groups
+            .map((g) => ({
+              g,
+              members: movements.filter((m) => m.money_movement_group_id === g.id),
+            }))
+            // With a category filter, groups left with no movements are omitted.
+            .filter(({ members }) => members.length > 0)
+            .map(({ g, members }) =>
+              compact({
+                created_at: g.group_created_at,
+                ...(all && { month: g.month }),
+                note: g.note || undefined,
+                money_movements: members.map((m) => mapMovement(m, false)),
+              })
+            ),
           ...(ungrouped.length > 0 && {
             ungrouped: ungrouped.map((m) => mapMovement(m, true)),
           }),
