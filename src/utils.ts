@@ -105,6 +105,29 @@ function dayRangeOf(name: string): { base: string; from: number; to: number } | 
   return m ? { base: looseCategoryName(m[1]), from: Number(m[2]), to: Number(m[3]) } : undefined;
 }
 
+// Every category a loosely worded name could mean: the exact (emoji-tolerant)
+// match alone if there is one, otherwise every category whose name has a word
+// starting with each query word. Matching is by word start, not anywhere in the
+// name, so "1st" matches "1st–7th" but not "24th–31st". Unlike
+// resolveCategoryQuery this keeps all day-range splits, so "eating out" returns
+// all four "Eating Out ..." categories. Hidden categories are only returned
+// when no visible category matches.
+export function matchCategoriesByWords<
+  T extends { name: string; deleted?: boolean; hidden?: boolean },
+>(categories: T[], query: string): T[] {
+  const live = categories.filter((c) => !c.deleted);
+  const exact = findCategoryByName(live, query);
+  if (exact) return [exact];
+  const words = looseCategoryName(query).split(' ').filter(Boolean);
+  if (words.length === 0) return [];
+  const hits = live.filter((c) => {
+    const nameWords = looseCategoryName(c.name).split(' ');
+    return words.every((w) => nameWords.some((n) => n.startsWith(w)));
+  });
+  const visible = hits.filter((c) => !c.hidden);
+  return visible.length > 0 ? visible : hits;
+}
+
 export type CategoryResolution<T> =
   // One category selected. `via` says how; `siblings` are the other day-range
   // splits of the same base name (empty unless via is 'day_range').
