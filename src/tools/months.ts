@@ -82,7 +82,7 @@ export function registerMonthTools(server: McpServer): void {
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         month: z.string().describe('Month in YYYY-MM-01 format, or "current" for the current month.'),
-        category_id: z.string().describe('The category to assign money to (from ynab_get_categories).'),
+        category_id: z.string().describe('The category to assign money to (from ynab_get_category).'),
         budgeted: z.number().describe(
           'The total amount to assign for the month, in dollars (e.g. 250 or 250.50). ' +
           'Replaces the current assigned amount.'
