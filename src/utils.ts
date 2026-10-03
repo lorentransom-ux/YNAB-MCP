@@ -86,6 +86,119 @@ export function resolveScheduledCategory<T extends { name: string; deleted?: boo
   return findCategoryByName(categories, name) ?? findWeeklyCategory(categories, name, day);
 }
 
+// Day of month (1-31) for "now" in the given IANA timezone.
+export function dayOfMonthInTz(timeZone: string): number {
+  return Number(new Date().toLocaleDateString('en-US', { timeZone, day: 'numeric' }));
+}
+
+// Loose form used for partial matching: emoji-tolerant normalization plus
+// punctuation flattened to spaces, so "8th-15th" matches "8th–15th".
+function looseCategoryName(name: string): string {
+  return normalizeCategoryName(name)
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+// Splits a category name into its base and day-of-month range, if it has one.
+function dayRangeOf(name: string): { base: string; from: number; to: number } | undefined {
+  const m = DAY_RANGE_SUFFIX.exec(normalizeCategoryName(name));
+  return m ? { base: looseCategoryName(m[1]), from: Number(m[2]), to: Number(m[3]) } : undefined;
+}
+
+export type CategoryResolution<T> =
+  // One category selected. `via` says how; `siblings` are the other day-range
+  // splits of the same base name (empty unless via is 'day_range').
+  | { kind: 'one'; category: T; via: 'exact' | 'partial' | 'day_range'; day?: number; siblings: T[] }
+  | { kind: 'ambiguous'; candidates: T[] }
+  | { kind: 'none'; suggestions: T[] };
+
+// Resolves a loosely worded category name to exactly one category, or reports
+// why it could not. Never guesses between unrelated categories:
+//   1. exact / emoji-tolerant name match
+//   2. unique partial match (every word of the query appears in the name)
+//   3. day-range splits ("Eating Out 1st–7th", "Eating Out 8th–15th", ...):
+//      picks the split covering `day`; a number in the query ("eating out 10")
+//      overrides `day`
+// Anything else is 'ambiguous' (several unrelated matches) or 'none'.
+// Hidden categories are only considered when no visible category matches.
+export function resolveCategoryQuery<
+  T extends { name: string; deleted?: boolean; hidden?: boolean },
+>(categories: T[], query: string, day: number): CategoryResolution<T> {
+  const live = categories.filter((c) => !c.deleted);
+
+  const exact = findCategoryByName(live, query);
+  if (exact) return { kind: 'one', category: exact, via: 'exact', siblings: [] };
+
+  const loose = looseCategoryName(query);
+  const tokens = loose.split(' ').filter(Boolean);
+  if (tokens.length === 0) return { kind: 'none', suggestions: [] };
+
+  const preferVisible = (list: T[]): T[] => {
+    const visible = list.filter((c) => !c.hidden);
+    return visible.length > 0 ? visible : list;
+  };
+  const containsAll = (words: string[]) =>
+    preferVisible(
+      live.filter((c) => {
+        const n = looseCategoryName(c.name);
+        return words.every((w) => n.includes(w));
+      })
+    );
+
+  const partial = containsAll(tokens);
+  if (partial.length === 1) {
+    return { kind: 'one', category: partial[0], via: 'partial', siblings: [] };
+  }
+
+  // Several (or zero) matches: see whether they are day-range splits of one base.
+  // A bare day number in the query selects the split instead of today's date.
+  const dayTokenIndex = tokens.findIndex((t) => /^\d{1,2}(st|nd|rd|th)?$/.test(t));
+  const queryDay = dayTokenIndex >= 0 ? parseInt(tokens[dayTokenIndex], 10) : undefined;
+  const baseTokens = dayTokenIndex >= 0 ? tokens.filter((_, i) => i !== dayTokenIndex) : tokens;
+  // With a day number, look at the whole family (the number itself may only
+  // appear in some splits' names, e.g. "3" in "23rd"); otherwise use the matches.
+  const pool =
+    baseTokens.length > 0 && (dayTokenIndex >= 0 || partial.length === 0)
+      ? containsAll(baseTokens)
+      : partial;
+
+  const ranges = pool.map((c) => ({ c, r: dayRangeOf(c.name) }));
+  const sameFamily =
+    pool.length > 1 &&
+    ranges.every((x) => x.r !== undefined && x.r.base === ranges[0].r?.base);
+
+  if (sameFamily) {
+    const pickDay = queryDay ?? day;
+    const hit = ranges.find((x) => x.r && pickDay >= x.r.from && pickDay <= x.r.to);
+    if (hit) {
+      return {
+        kind: 'one',
+        category: hit.c,
+        via: 'day_range',
+        day: pickDay,
+        siblings: pool.filter((c) => c !== hit.c),
+      };
+    }
+    return { kind: 'ambiguous', candidates: pool };
+  }
+
+  const rest = partial.length > 0 ? partial : pool;
+  if (rest.length > 1) return { kind: 'ambiguous', candidates: rest };
+  if (rest.length === 1) {
+    return { kind: 'one', category: rest[0], via: 'partial', siblings: [] };
+  }
+
+  // Nothing matched every word; suggest categories that match any meaningful word.
+  const words = baseTokens.filter((t) => t.length >= 3);
+  const suggestions = preferVisible(
+    live.filter((c) => {
+      const n = looseCategoryName(c.name);
+      return words.some((w) => n.includes(w));
+    })
+  );
+  return { kind: 'none', suggestions };
+}
+
 // When a transaction tool is called without since_date, bound the otherwise
 // full-history fetch to this many days back.
 export const DEFAULT_SINCE_DAYS = 90;
