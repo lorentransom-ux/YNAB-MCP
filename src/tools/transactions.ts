@@ -414,10 +414,12 @@ export function registerTransactionTools(server: McpServer): void {
         'Update an existing transaction. Only the provided fields are changed. ' +
         'Use this to recategorize, edit amounts/memos, approve, or mark transactions cleared. ' +
         'Requires transaction_id (from ynab_get_transactions). ' +
-        'The YNAB API cannot add or change splits on an existing transaction. ' +
-        'To record a multi-category purchase, create a new split with ynab_create_transaction ' +
-        '(or split the import in the YNAB app). Returns the updated transaction including ' +
-        'flag_color, flag_name, and subtransactions when already split.',
+        'To turn an UNSPLIT transaction into a split across categories, pass subtransactions ' +
+        '(at least two lines, each with amount and category_id, adding up to the transaction ' +
+        'amount) and omit category_id. A transaction that is ALREADY a split cannot have its ' +
+        'lines changed through the YNAB API; edit that in the YNAB app. If YNAB does not ' +
+        'apply the split, the call fails and says so. Returns the updated transaction ' +
+        'including flag_color, flag_name, and subtransactions when split.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction to update.'),
@@ -426,7 +428,11 @@ export function registerTransactionTools(server: McpServer): void {
         amount: z.number().optional().describe(AMOUNT_DESC),
         payee_id: z.string().optional().describe('New payee ID.'),
         payee_name: z.string().optional().describe('New payee name. Matched to an existing payee or created.'),
-        category_id: z.string().optional().describe('New category ID (from ynab_get_categories). Cannot change the category of an existing split.'),
+        category_id: z.string().optional().describe('New category ID (from ynab_get_categories). Cannot change the category of an existing split. Omit when passing subtransactions.'),
+        subtransactions: z.array(splitLineSchema).optional().describe(
+          'Split lines that turn an unsplit transaction into a split. At least two lines; amounts ' +
+          'must add up to the transaction amount (same sign). Not allowed on a transaction that is already split.'
+        ),
         memo: z.string().optional().describe('New memo.'),
         cleared: clearedSchema.optional().describe('New cleared status.'),
         approved: z.boolean().optional().describe('Set true to approve an unapproved transaction.'),
@@ -447,12 +453,72 @@ export function registerTransactionTools(server: McpServer): void {
           ...(args.approved !== undefined && { approved: args.approved }),
           ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
         };
-        const response = await api.transactions.updateTransaction(
-          planId,
-          args.transaction_id,
-          { transaction }
-        );
-        return mapTransaction(response.data.transaction);
+        const splits = args.subtransactions;
+        if (!splits?.length) {
+          const response = await api.transactions.updateTransaction(
+            planId,
+            args.transaction_id,
+            { transaction }
+          );
+          return mapTransaction(response.data.transaction);
+        }
+
+        // --- Turning an unsplit transaction into a split ---
+        if (args.category_id) {
+          throw new Error(
+            'Omit category_id when splitting. Each split line has its own category_id. Nothing was changed.'
+          );
+        }
+        // Read the transaction first: to refuse an existing split before calling
+        // YNAB (the API rejects changes to existing split lines), to check the lines
+        // against the real amount, and to know the category to restore if needed.
+        const current = (await api.transactions.getTransactionById(planId, args.transaction_id))
+          .data.transaction;
+        if (current.deleted) {
+          throw new Error(`Transaction ${args.transaction_id} has been deleted. Nothing was changed.`);
+        }
+        if ((current.subtransactions ?? []).some((line) => !line.deleted)) {
+          throw new Error(
+            `Transaction ${args.transaction_id} is already a split. The YNAB API cannot change ` +
+              'the lines of an existing split; edit it in the YNAB app. Nothing was changed.'
+          );
+        }
+        const total = args.amount ?? current.amount / 1000;
+        const lines = buildSplitLines(total, splits); // throws if the lines do not add up
+
+        const response = await api.transactions.updateTransaction(planId, args.transaction_id, {
+          transaction: {
+            ...transaction,
+            // The spec's instruction for a split: null category on the parent.
+            category_id: null as unknown as string,
+            subtransactions: lines,
+          },
+        });
+        const updated = response.data.transaction;
+        const applied = (updated.subtransactions ?? []).filter((line) => !line.deleted);
+        if (applied.length !== lines.length) {
+          // YNAB accepted the request but did not split it. The parent's category may
+          // have been cleared by the request, so put the original back and say so.
+          let restore = 'The transaction had no category before, so there was nothing to restore.';
+          if (current.category_id) {
+            try {
+              await api.transactions.updateTransaction(planId, args.transaction_id, {
+                transaction: { category_id: current.category_id },
+              });
+              restore = `Its original category (${current.category_name ?? current.category_id}) was put back.`;
+            } catch {
+              restore =
+                `Its original category (${current.category_name ?? current.category_id}, id ` +
+                `${current.category_id}) could NOT be put back; set it with ynab_update_transaction.`;
+            }
+          }
+          throw new Error(
+            `YNAB accepted the update but did not split transaction ${args.transaction_id}: ` +
+              `expected ${lines.length} split lines, got ${applied.length}. ${restore} ` +
+              'Other fields sent in this call may have been applied; check with ynab_get_transaction.'
+          );
+        }
+        return mapTransaction(updated);
       })
   );
 
@@ -463,7 +529,8 @@ export function registerTransactionTools(server: McpServer): void {
         'Update SEVERAL existing transactions in one call (e.g. approve, recategorize, or re-memo ' +
         'a batch while reconciling). Each item needs transaction_id plus at least one field to ' +
         'change; only the provided fields are changed. For a single transaction use ' +
-        `ynab_update_transaction. At most ${MAX_BULK_UPDATES} per call. Cannot add or change splits. ` +
+        `ynab_update_transaction. At most ${MAX_BULK_UPDATES} per call. Cannot add splits here; to split ` +
+        'one transaction use ynab_update_transaction with subtransactions. ' +
         'Fails with the list of IDs if YNAB does not confirm every transaction. ' +
         'Returns the updated transactions.',
       inputSchema: {
