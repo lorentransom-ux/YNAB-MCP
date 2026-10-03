@@ -4,7 +4,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 
 ## Features
 
-28 budget tools — 14 read, 14 write — all accessible via Claude chat.
+32 budget tools — 16 read, 16 write — all accessible via Claude chat.
 
 **Read tools:**
 
@@ -16,14 +16,16 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_category` | One category by loose name or ID — budgeted, activity, balance, goal info. Resolves day-range splits (e.g. `Eating Out 8th–15th`) to the one covering today; fails with candidates when the name is ambiguous |
 | `ynab_get_months` | All budget months with income/budgeted/activity totals |
 | `ynab_get_month_detail` | Full category breakdown for a specific month |
-| `ynab_get_transactions` | All transactions with optional date filters; includes `flag_color`, `flag_name`, and `subtransactions` on splits |
+| `ynab_get_transactions` | Transactions with optional `month`, `type` (`unapproved` / `uncategorized`), and date filters; includes `flag_color`, `flag_name`, and `subtransactions` on splits |
+| `ynab_get_transaction` | One transaction by ID, with its account, payee, and category IDs |
 | `ynab_get_transactions_by_account` | Transactions for a specific account (includes flags) |
 | `ynab_get_transactions_by_category` | Transactions for a specific category (includes flags) |
 | `ynab_get_transactions_by_payee` | Transactions for a specific payee (includes flags) |
 | `ynab_get_category_groups` | Category group IDs and names, including empty and hidden groups |
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
-| `ynab_get_money_movements` | Account-to-account transfers (includes flags) |
+| `ynab_get_money_transfers` | Account-to-account transfers (includes flags). Formerly `ynab_get_money_movements` |
+| `ynab_get_category_money_movements` | Money moved between categories or to/from Ready to Assign, by month, optionally grouped by the action that made them |
 
 **Write tools:**
 
@@ -31,6 +33,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 |------|-------------|
 | `ynab_create_transaction` | Add a transaction, a linked transfer via `transfer_payee_id`, or a multi-category split via `subtransactions` |
 | `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction (cannot add splits to an existing one) |
+| `ynab_update_transactions` | Update several transactions in one call; fails with the IDs if YNAB does not confirm every one |
 | `ynab_delete_transaction` | Delete a transaction |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
 | `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
@@ -39,6 +42,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_update_scheduled_transaction` | Edit a scheduled transaction |
 | `ynab_delete_scheduled_transaction` | Delete a scheduled transaction |
 | `ynab_rename_payee` | Rename a payee |
+| `ynab_create_payee` | Create a payee; refuses a duplicate name and returns the existing ID |
 | `ynab_create_account` | Create an unlinked (manually tracked) account |
 | `ynab_create_category` | Create a category in a group; optionally set goal target/date/frequency |
 | `ynab_create_category_group` | Create a category group (name, max 50 characters) |
@@ -72,7 +76,7 @@ A `payee_name` like `Transfer : Checking` is resolved to that existing transfer 
 
 ### Transaction flags
 
-List/get responses (`ynab_get_transactions`, by account/payee/category, and `ynab_get_money_movements`) include `flag_color` (`red` / `orange` / `yellow` / `green` / `blue` / `purple`) and `flag_name` (the custom name on that flag, if any). `ynab_create_transaction` and `ynab_update_transaction` can set `flag_color`; a later get returns both fields. Merchant order-history URLs are not in the YNAB REST API and are not exposed here.
+List/get responses (`ynab_get_transactions`, by account/payee/category, and `ynab_get_money_transfers`) include `flag_color` (`red` / `orange` / `yellow` / `green` / `blue` / `purple`) and `flag_name` (the custom name on that flag, if any). `ynab_create_transaction` and `ynab_update_transaction` can set `flag_color`; a later get returns both fields. Merchant order-history URLs are not in the YNAB REST API and are not exposed here.
 
 Plus an optional **Telegram** integration: each person gets a scheduled budget digest on their own schedule and category list, can ask plain-English budget questions any time, and can adjust their own digest settings just by chatting — no phone number, carrier registration, or 10DLC required.
 
