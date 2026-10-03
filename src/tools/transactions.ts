@@ -346,7 +346,7 @@ export function registerTransactionTools(server: McpServer): void {
         ),
         memo: z.string().optional().describe('Optional memo.'),
         cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
-        approved: z.boolean().optional().describe('Whether the transaction is approved. If omitted, YNAB leaves the new transaction UNAPPROVED; pass true to approve it.'),
+        approved: z.boolean().optional().describe('Whether the transaction is approved. Defaults to true: the server approves a new transaction unless you pass false.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
       },
     },
@@ -414,7 +414,10 @@ export function registerTransactionTools(server: McpServer): void {
             ...(subtransactions !== undefined && { subtransactions }),
             ...(args.memo !== undefined && { memo: args.memo }),
             ...(args.cleared !== undefined && { cleared: args.cleared }),
-            ...(args.approved !== undefined && { approved: args.approved }),
+            // YNAB leaves a transaction unapproved when this is omitted. A transaction
+            // entered through this tool was dictated by its owner, so approve it by
+            // default, as the YNAB app does for manual entries.
+            approved: args.approved ?? true,
             ...(args.flag_color !== undefined && { flag_color: args.flag_color }),
           },
         });
