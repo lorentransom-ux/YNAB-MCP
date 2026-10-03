@@ -25,7 +25,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_get_payees` | All payees with IDs (for use with filtered queries) |
 | `ynab_get_scheduled_transactions` | Upcoming and recurring scheduled transactions |
 | `ynab_get_money_transfers` | Account-to-account transfers (includes flags). Formerly `ynab_get_money_movements` |
-| `ynab_get_category_money_movements` | Money moved between categories or to/from Ready to Assign, by month. Optional `category` filter (loose name, or `ready to assign`) and grouping by the action that made them |
+| `ynab_get_category_money_movements` | Money moved between categories or to/from Ready to Assign. `month` is the budget month the money belongs to; `moved_since` / `moved_until` filter by the date the move was made (and search every budget month when `month` is omitted). Optional `category` filter and grouping by action. Always reports `total_in_period`, `count`, and `action_count` |
 
 **Write tools:**
 

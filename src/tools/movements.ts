@@ -10,6 +10,9 @@ import {
   matchCategoriesByWords,
   DEFAULT_SINCE_DAYS,
 } from '../utils.js';
+import { loadConfig } from '../config.js';
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function registerMovementTools(server: McpServer): void {
   server.registerTool(
@@ -65,8 +68,13 @@ export function registerMovementTools(server: McpServer): void {
         'so pass category whenever the question is about one category (e.g. "where did Eating ' +
         'Out get its money?"): only movements into or out of it are returned. category is a ' +
         'loose name; "eating out" covers every "Eating Out ..." split, and "ready to assign" ' +
-        'works too. Defaults to the current month; pass month for another month, or month="all" ' +
-        'for the whole history. Set grouped=true to nest movements under the single action that ' +
+        'works too. IMPORTANT: month is the BUDGET month the money belongs to, not when the move ' +
+        'was made; October\'s budget is often funded in September. To ask what was moved ON ' +
+        'certain dates, pass moved_since and/or moved_until; with those and no month, every ' +
+        'budget month is searched so nothing is missed. Without date filters, month defaults to ' +
+        'the current budget month; month="all" is the whole history. The response always reports ' +
+        'total_in_period (movements before any filter) next to count (movements returned) and ' +
+        'action_count (distinct actions: each group counts once). Set grouped=true to nest movements under the single action that ' +
         'made them (e.g. one assignment that funded several categories). For transfers between ' +
         'ACCOUNTS, use ynab_get_money_transfers instead.',
       inputSchema: {
@@ -76,7 +84,14 @@ export function registerMovementTools(server: McpServer): void {
           'capitalization ignored, partial names work), or "ready to assign".'
         ),
         month: z.string().optional().describe(
-          'Month in YYYY-MM-01 format, "current" (default), or "all" for every month.'
+          'BUDGET month in YYYY-MM-01 format, "current", or "all" for every month. Defaults to ' +
+          '"current", or to "all" when moved_since or moved_until is given.'
+        ),
+        moved_since: z.string().optional().describe(
+          'Return only movements made on or after this date (YYYY-MM-DD, in the budget owner\'s timezone).'
+        ),
+        moved_until: z.string().optional().describe(
+          'Return only movements made on or before this date (YYYY-MM-DD, in the budget owner\'s timezone).'
         ),
         grouped: z.boolean().optional().describe(
           'When true, nest movements under their money movement group. Defaults to false.'
@@ -85,7 +100,24 @@ export function registerMovementTools(server: McpServer): void {
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
-        const all = args.month === 'all';
+        for (const [key, value] of [
+          ['moved_since', args.moved_since],
+          ['moved_until', args.moved_until],
+        ] as const) {
+          if (value !== undefined && !ISO_DATE.test(value)) {
+            throw new Error(`${key} must be a date in YYYY-MM-DD format; got "${value}".`);
+          }
+        }
+        if (args.moved_since && args.moved_until && args.moved_since > args.moved_until) {
+          throw new Error(
+            `moved_since (${args.moved_since}) is after moved_until (${args.moved_until}).`
+          );
+        }
+        const byDate = args.moved_since !== undefined || args.moved_until !== undefined;
+
+        // A move made on a given date can belong to any budget month (next month is
+        // often funded early), so a date filter with no month searches every month.
+        const all = args.month === 'all' || (args.month === undefined && byDate);
         const month = all ? undefined : resolveMonth(args.month ?? 'current');
 
         // GET /plans/{id}/money_movements  or  /plans/{id}/months/{month}/money_movements
@@ -138,6 +170,27 @@ export function registerMovementTools(server: McpServer): void {
           }
         }
 
+        // Optional filter: keep only movements made within a date range. moved_at is
+        // a UTC timestamp; compare its calendar date in the budget owner's timezone
+        // so an evening move is not counted on the next day.
+        const timeZone = loadConfig().users[0]?.timezone ?? 'UTC';
+        if (byDate) {
+          const localDate = (iso: string | undefined): string | undefined => {
+            if (!iso) return undefined;
+            const d = new Date(iso);
+            return Number.isNaN(d.getTime()) ? undefined : d.toLocaleDateString('en-CA', { timeZone });
+          };
+          movements = movements.filter((m) => {
+            const d = localDate(m.moved_at);
+            // A movement with no usable timestamp cannot be placed in a date range.
+            if (!d) return false;
+            return (
+              (!args.moved_since || d >= args.moved_since) &&
+              (!args.moved_until || d <= args.moved_until)
+            );
+          });
+        }
+
         // The month is stated once at the top unless the request spans every month.
         // The movement's own ID is omitted because no tool or endpoint takes it.
         // group_id is kept in full so it is never ambiguous which movements were
@@ -153,11 +206,26 @@ export function registerMovementTools(server: McpServer): void {
             ...(withGroupId && { group_id: m.money_movement_group_id }),
           });
 
+        // Distinct actions: every group counts once, every ungrouped movement once.
+        const groupIds = new Set<string>();
+        let singles = 0;
+        for (const m of movements) {
+          if (m.money_movement_group_id) groupIds.add(m.money_movement_group_id);
+          else singles++;
+        }
+
         const header = {
-          month: month ?? 'all',
+          budget_month: month ?? 'all',
           ...(matched && { category_filter: matched }),
+          ...(byDate && {
+            moved_since: args.moved_since,
+            moved_until: args.moved_until,
+            dates_in_timezone: timeZone,
+          }),
+          // Always shown, so a filtered answer never hides how much it left out.
+          total_in_period: totalInPeriod,
           count: movements.length,
-          ...(matched && { total_in_period: totalInPeriod }),
+          action_count: groupIds.size + singles,
         };
 
         if (!args.grouped) {
