@@ -34,7 +34,7 @@ A TypeScript MCP (Model Context Protocol) server that connects to the YNAB API f
 | `ynab_create_transaction` | Add a transaction, a linked transfer via `transfer_payee_id`, or a multi-category split via `subtransactions`. Approved by default |
 | `ynab_update_transaction` | Edit, recategorize, approve, or clear a transaction, or turn an unsplit transaction into a split via `subtransactions` (the lines of an existing split cannot be changed) |
 | `ynab_update_transactions` | Update several transactions in one call; fails with the IDs if YNAB does not confirm every one |
-| `ynab_delete_transaction` | Delete a transaction |
+| `ynab_delete_transaction` | Delete a transaction. For a split, also makes YNAB recalculate each line's category (YNAB leaves the deleted lines in the spent total otherwise) and fails if a category still does not match |
 | `ynab_import_transactions` | Trigger import from linked bank accounts |
 | `ynab_set_category_budget` | Set a category's assigned amount for a month (money moves) |
 | `ynab_update_category` | Rename a category, edit its note/group, or set/remove goal target fields |

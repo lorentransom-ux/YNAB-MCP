@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ynabRead, ynabWrite, cachedFetch } from '../ynab.js';
 import { toUSD, toMilliunits, daysAgo, resolveMonth, compact, DEFAULT_SINCE_DAYS } from '../utils.js';
 import type {
+  API,
   TransactionDetail,
   HybridTransaction,
   ExistingTransaction,
@@ -104,6 +105,138 @@ function buildSplitLines(
     );
   }
   return lines;
+}
+
+// One cent, in milliunits: the amount of the temporary entry that makes YNAB
+// recalculate a category (see deleteSplitAndSettle).
+const RECALC_MILLIUNITS = -10;
+const RECALC_MEMO = 'Temporary recalculation entry (YNAB MCP) - safe to delete';
+
+// Deleting a SPLIT through the YNAB API removes the transaction but leaves each
+// line's category activity unchanged (observed 2026-10-04: the stale figure
+// outlived the read cache, and deleting an unsplit transaction recalculated
+// correctly). Creating and deleting a one-cent transaction in the category makes
+// YNAB recalculate it. So, for a split: read the month's activity before the
+// delete, work out what each line's category should show afterwards, and after
+// the delete flush only the categories YNAB left stale. If a category still does
+// not match, fail and say so; the delete itself is never undone.
+async function deleteSplitAndSettle(
+  api: API,
+  planId: string,
+  current: TransactionDetail
+): Promise<{ deleted: TransactionDetail; recalculated: string[] }> {
+  // Amount each category should lose, keyed by category id. Lines without a
+  // category (transfers) have no category activity to correct.
+  const lineTotals = new Map<string, { name: string; amount: number }>();
+  for (const line of current.subtransactions ?? []) {
+    if (line.deleted || !line.category_id) continue;
+    const entry = lineTotals.get(line.category_id) ?? {
+      name: line.category_name ?? line.category_id,
+      amount: 0,
+    };
+    entry.amount += line.amount;
+    lineTotals.set(line.category_id, entry);
+  }
+
+  const month = `${current.date.slice(0, 7)}-01`;
+  const readActivity = async (): Promise<Map<string, number>> => {
+    // Not cached: these reads have to see YNAB's figures as they are right now.
+    const response = await api.months.getPlanMonth(planId, month);
+    return new Map(response.data.month.categories.map((c) => [c.id, c.activity]));
+  };
+
+  const before = lineTotals.size ? await readActivity() : new Map<string, number>();
+  const expected = new Map<string, number>();
+  for (const [categoryId, line] of lineTotals) {
+    const activity = before.get(categoryId);
+    if (activity === undefined) {
+      throw new Error(
+        `Could not read activity for category ${line.name} (${categoryId}) in ${month}, so the ` +
+          'delete could not be checked afterwards. Nothing was changed.'
+      );
+    }
+    expected.set(categoryId, activity - line.amount);
+  }
+
+  const deleted = (await api.transactions.deleteTransaction(planId, current.id)).data.transaction;
+  if (!lineTotals.size) return { deleted, recalculated: [] };
+
+  const done = `Split transaction ${current.id} WAS deleted.`;
+  const staleIn = (activity: Map<string, number>) =>
+    [...expected].filter(([categoryId, want]) => activity.get(categoryId) !== want);
+
+  let after: Map<string, number>;
+  try {
+    after = await readActivity();
+  } catch (err) {
+    throw new Error(
+      `${done} Its categories could not be checked afterwards ` +
+        `(${err instanceof Error ? err.message : 'YNAB read failed'}), so their spent totals may ` +
+        `still include the deleted lines: ${[...lineTotals.values()].map((l) => l.name).join(', ')}. ` +
+        'Check each with ynab_get_category.'
+    );
+  }
+
+  const recalculated: string[] = [];
+  const problems: string[] = [];
+  for (const [categoryId] of staleIn(after)) {
+    const name = lineTotals.get(categoryId)!.name;
+    let tempId: string | undefined;
+    try {
+      const created = await api.transactions.createTransaction(planId, {
+        transaction: {
+          account_id: current.account_id,
+          date: current.date,
+          amount: RECALC_MILLIUNITS,
+          category_id: categoryId,
+          memo: RECALC_MEMO,
+          approved: true,
+        },
+      });
+      tempId = created.data.transaction?.id;
+      if (!tempId) throw new Error('YNAB did not return the temporary transaction');
+    } catch (err) {
+      problems.push(
+        `${name}: could not create the temporary one-cent entry ` +
+          `(${err instanceof Error ? err.message : 'YNAB write failed'}), so its spent total is still stale`
+      );
+      continue;
+    }
+    try {
+      await api.transactions.deleteTransaction(planId, tempId);
+      recalculated.push(name);
+    } catch {
+      problems.push(
+        `${name}: a temporary one-cent transaction (${tempId}) was created but could NOT be ` +
+          'deleted; delete it with ynab_delete_transaction'
+      );
+    }
+  }
+
+  if (recalculated.length && !problems.length) {
+    let final: Map<string, number>;
+    try {
+      final = await readActivity();
+    } catch (err) {
+      throw new Error(
+        `${done} Recalculated ${recalculated.join(', ')}, but the result could not be read back ` +
+          `(${err instanceof Error ? err.message : 'YNAB read failed'}). Check each with ynab_get_category.`
+      );
+    }
+    for (const [categoryId, want] of staleIn(final)) {
+      problems.push(
+        `${lineTotals.get(categoryId)!.name}: activity is ${toUSD(final.get(categoryId))} but should ` +
+          `be ${toUSD(want)} (another change to this category at the same moment would also cause this)`
+      );
+    }
+  }
+
+  if (problems.length) {
+    throw new Error(
+      `${done} But YNAB did not correct every category it touched: ${problems.join('; ')}.`
+    );
+  }
+  return { deleted, recalculated };
 }
 
 async function loadPayees(api: { payees: { getPayees: (planId: string) => Promise<{ data: { payees: Payee[] } }> } }, planId: string) {
@@ -635,7 +768,12 @@ export function registerTransactionTools(server: McpServer): void {
     {
       description:
         'Delete a transaction. Requires transaction_id (from ynab_get_transactions). ' +
-        'Returns the deleted transaction for confirmation.',
+        'Returns the deleted transaction for confirmation. ' +
+        'Deleting a SPLIT: YNAB leaves the split lines in each category\'s spent total, so this ' +
+        'tool checks every line\'s category afterwards and, where the total is stale, creates and ' +
+        'deletes a one-cent transaction there to make YNAB recalculate (listed in ' +
+        'recalculated_categories). No manual flush is needed. If a category still does not ' +
+        'match, the call fails and names it; the split is deleted either way.',
       inputSchema: {
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction to delete.'),
@@ -643,8 +781,20 @@ export function registerTransactionTools(server: McpServer): void {
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
-        const response = await api.transactions.deleteTransaction(planId, args.transaction_id);
-        return { deleted: true, ...mapTransaction(response.data.transaction) };
+        const current = (await api.transactions.getTransactionById(planId, args.transaction_id))
+          .data.transaction;
+        const isSplit = (current.subtransactions ?? []).some((line) => !line.deleted);
+        if (!isSplit) {
+          const response = await api.transactions.deleteTransaction(planId, args.transaction_id);
+          return { deleted: true, ...mapTransaction(response.data.transaction) };
+        }
+        const { deleted, recalculated } = await deleteSplitAndSettle(api, planId, current);
+        return {
+          deleted: true,
+          ...mapTransaction(deleted),
+          was_split: true,
+          recalculated_categories: recalculated,
+        };
       })
   );
 
