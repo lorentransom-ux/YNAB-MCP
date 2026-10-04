@@ -132,7 +132,7 @@ export function ynabRead(
 }
 
 // Write-tool counterpart of ynabRead: same client/plan_id resolution and error
-// handling, but flushes the read cache after the write succeeds. The whole
+// handling, but flushes the read cache after the write, whether it succeeded or failed. The whole
 // cache is cleared (rather than per-key invalidation) because a single write
 // can affect many read views — a transaction touches account balances, month
 // activity, and category balances at once — and entries expire in 45s anyway.
@@ -141,9 +141,13 @@ export function ynabWrite(
   build: (api: ynab.API, planId: string) => Promise<unknown>
 ): Promise<McpContent> {
   return withYnabErrorHandling(async () => {
-    const result = await build(getYnabClient(), args?.plan_id ?? 'last-used');
-    responseCache.clear();
-    return jsonResult(result);
+    try {
+      return jsonResult(await build(getYnabClient(), args?.plan_id ?? 'last-used'));
+    } finally {
+      // Also on failure: a write tool can change YNAB and then throw (a split
+      // delete that could not be settled, a split that YNAB did not apply).
+      responseCache.clear();
+    }
   });
 }
 
