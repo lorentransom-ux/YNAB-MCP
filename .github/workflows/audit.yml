@@ -1,0 +1,25 @@
+# Weekly security audit of the full dependency tree. Dependabot version
+# updates only bump direct dependencies, so a vulnerable transitive package
+# (e.g. proxy-addr under express) can sit unnoticed. A failed run emails the
+# repo owner; fix with `npm audit fix` (lockfile only) and redeploy.
+name: Security audit
+
+on:
+  schedule:
+    - cron: "17 13 * * 1" # Mondays, ~8am Central
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - "**/package.json"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high
