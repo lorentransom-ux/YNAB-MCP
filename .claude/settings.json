@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "deny": [
+      "mcp__Railway__railway-agent"
+    ],
+    "ask": [
+      "mcp__Railway__create-tcp-proxy",
+      "mcp__Railway__generate-domain"
+    ]
+  }
+}
