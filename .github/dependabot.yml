@@ -1,5 +1,6 @@
-# Weekly dependency update PRs (npm packages and the GitHub Actions in .github/workflows). Railway deploys only from main, so nothing
-# ships until a PR is reviewed and merged.
+# Weekly dependency update PRs for npm packages and the GitHub Actions in
+# .github/workflows. Railway deploys only from main, so nothing ships until a
+# PR is reviewed and merged.
 version: 2
 updates:
   - package-ecosystem: npm
