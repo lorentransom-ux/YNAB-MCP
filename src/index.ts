@@ -8,7 +8,7 @@ import { initScheduler } from './scheduler.js';
 import { initAlerts } from './alerts.js';
 import { initConfigStore, seedConfigFromEnv } from './config.js';
 import { handleInboundTelegram } from './telegram-chat.js';
-import { isTelegramConfigured, registerTelegramWebhook } from './telegram.js';
+import { getTelegramHealth, isTelegramConfigured, registerTelegramWebhook } from './telegram.js';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const SERVER_URL = process.env.SERVER_URL ?? `http://localhost:${PORT}`;
@@ -47,8 +47,15 @@ app.post('/oauth/approve', (req, res) => {
   }
 });
 
+// Railway gates each deploy on this check and emails on failure, which is the
+// one owner alert that doesn't depend on Telegram. So report 503 while webhook
+// registration is still running (so the check waits for its outcome) and when
+// Telegram has rejected the bot token. A webhook failure with a valid token stays
+// 200: the owner is told over Telegram, and the MCP server is still useful.
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok' });
+  const telegram = getTelegramHealth();
+  const unhealthy = telegram.status === 'pending' || telegram.status === 'unauthorized';
+  res.status(unhealthy ? 503 : 200).json({ status: unhealthy ? 'degraded' : 'ok', telegram });
 });
 
 app.post('/telegram', handleInboundTelegram);
