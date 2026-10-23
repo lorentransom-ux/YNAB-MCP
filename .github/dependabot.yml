@@ -1,5 +1,6 @@
-# Weekly dependency update PRs. Railway deploys only from main, so nothing
-# ships until a PR is reviewed and merged.
+# Weekly dependency update PRs for npm packages and the GitHub Actions in
+# .github/workflows. Railway deploys only from main, so nothing ships until a
+# PR is reviewed and merged.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -32,3 +33,16 @@ updates:
           - patch
         exclude-patterns:
           - "@modelcontextprotocol/*"
+  # Keeps actions/checkout, actions/setup-node etc. current, so runtime
+  # deprecations (like Node 20 for actions) arrive as a PR instead of a CI warning.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: America/Chicago
+    groups:
+      actions:
+        patterns:
+          - "*"
