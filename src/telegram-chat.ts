@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import type Anthropic from '@anthropic-ai/sdk';
 import type { Request, Response } from 'express';
 import { loadConfig } from './config.js';
 import { sendTelegram, webhookSecret } from './telegram.js';
@@ -7,6 +8,37 @@ import { fetchYnabContext, askClaude, withTimeout } from './assistant.js';
 // Telegram handles up to 4096 chars; cap replies well under that and let Claude
 // use line breaks / light Markdown.
 const MAX_TELEGRAM_LENGTH = 1000;
+
+// Short-term conversation memory, per chat. Held in process memory only: it's lost
+// on restart/redeploy, which is fine for quick back-and-forth follow-ups.
+const HISTORY_TURNS = 6; // question/answer pairs kept per chat
+const HISTORY_TTL_MS = 30 * 60 * 1000; // forget a conversation after 30 min idle
+const RESET_COMMANDS = new Set(['/reset', '/new', '/start']);
+
+interface ChatHistory {
+  messages: Anthropic.MessageParam[];
+  lastActive: number;
+}
+const histories = new Map<number, ChatHistory>();
+
+function getHistory(chatId: number): Anthropic.MessageParam[] {
+  const entry = histories.get(chatId);
+  if (!entry) return [];
+  if (Date.now() - entry.lastActive > HISTORY_TTL_MS) {
+    histories.delete(chatId);
+    return [];
+  }
+  return entry.messages;
+}
+
+function rememberTurn(chatId: number, question: string, answer: string): void {
+  const messages = [
+    ...getHistory(chatId),
+    { role: 'user', content: question } as const,
+    { role: 'assistant', content: answer } as const,
+  ].slice(-HISTORY_TURNS * 2);
+  histories.set(chatId, { messages, lastActive: Date.now() });
+}
 
 async function sendReply(res: Response, chatId: number, message: string): Promise<void> {
   const safe = message.length > MAX_TELEGRAM_LENGTH ? message.slice(0, MAX_TELEGRAM_LENGTH - 1) + '…' : message;
@@ -62,6 +94,12 @@ export async function handleInboundTelegram(req: Request, res: Response): Promis
   }
   console.log(`[Telegram Chat] Inbound from ${user.name}: "${body}"`);
 
+  if (RESET_COMMANDS.has(body.toLowerCase())) {
+    histories.delete(chatId);
+    await sendReply(res, chatId, 'Started a fresh conversation — ask me anything about your budget.');
+    return;
+  }
+
   let ynabContext: string;
   try {
     ynabContext = await withTimeout(fetchYnabContext(user.timezone), 8000, 'YNAB fetch');
@@ -73,10 +111,11 @@ export async function handleInboundTelegram(req: Request, res: Response): Promis
 
   try {
     const answer = await withTimeout(
-      askClaude(user, ynabContext, body, MAX_TELEGRAM_LENGTH),
+      askClaude(user, ynabContext, body, MAX_TELEGRAM_LENGTH, getHistory(chatId)),
       15000,
       'Claude'
     );
+    rememberTurn(chatId, body, answer);
     await sendReply(res, chatId, answer);
   } catch (err) {
     console.error('[Telegram Chat] Claude error:', err instanceof Error ? err.message : err);

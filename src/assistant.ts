@@ -286,7 +286,8 @@ export async function askClaude(
   user: UserConfig,
   ynabContext: string,
   question: string,
-  maxLength: number
+  maxLength: number,
+  history: Anthropic.MessageParam[] = []
 ): Promise<string> {
   const system =
     `You are a personal budget assistant for ${user.name}. ` +
@@ -303,10 +304,14 @@ export async function askClaude(
     `After using either tool, confirm what changed in plain language. ` +
     `If a tool result says it could not find the category or did not set the alert, ` +
     `relay that to the user verbatim — do NOT claim the alert was set, and pass along any suggested category names. ` +
-    `If you cannot answer from the data provided, say so briefly.\n\n` +
+    `If you cannot answer from the data provided, say so briefly. ` +
+    `Earlier messages in this conversation are included — use them to resolve follow-ups ` +
+    `(e.g. a short answer to a clarifying question you asked).\n\n` +
     `${describeDigestSettings(user)}\n\n${ynabContext}`;
 
-  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: question }];
+  // Prior turns are plain text only (tool calls aren't kept), so the conversation
+  // always starts with a user turn and alternates as the API requires.
+  const messages: Anthropic.MessageParam[] = [...history, { role: 'user', content: question }];
 
   // Agentic loop: let the model call ynab_update_config (and see the result) before
   // it produces its final text reply. Bounded so a misbehaving model can't spin.
