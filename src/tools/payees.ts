@@ -9,9 +9,9 @@ export function registerPayeeTools(server: McpServer): void {
       description:
         'Get all payees with their IDs and names. ' +
         'Use this to resolve payee names to IDs before calling ynab_get_transactions_by_payee.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -37,10 +37,10 @@ export function registerPayeeTools(server: McpServer): void {
         '(case-insensitive) and returns the existing payee ID instead of creating a duplicate. ' +
         'Not needed before ynab_create_transaction, which creates a payee from payee_name. ' +
         'The YNAB API cannot delete payees; remove one in the YNAB app. Returns the new payee (id, name).',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().min(1).max(500).describe('The payee name (max 500 characters).'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -67,11 +67,11 @@ export function registerPayeeTools(server: McpServer): void {
       description:
         'Rename a payee. All existing transactions using the payee keep pointing to it ' +
         'under the new name. Requires payee_id (from ynab_get_payees).',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         payee_id: z.string().describe('The payee to rename.'),
         name: z.string().describe('The new payee name.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {

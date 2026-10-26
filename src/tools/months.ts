@@ -11,9 +11,9 @@ export function registerMonthTools(server: McpServer): void {
       description:
         'List all budget months available, with income, budgeted, and activity totals. ' +
         'Useful for determining the available date range before querying specific months.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -39,12 +39,12 @@ export function registerMonthTools(server: McpServer): void {
       description:
         'Get the full category breakdown for a specific budget month, including ' +
         'budgeted, activity, and balance for each category plus goal information.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         month: z.string().describe(
           'Month in YYYY-MM-01 format, or "current" for the current month.'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -79,7 +79,7 @@ export function registerMonthTools(server: McpServer): void {
         'To move money between categories, call this twice: decrease one category and ' +
         'increase the other (read current amounts with ynab_get_month_detail first). ' +
         'Returns the updated category with its new budgeted amount and balance.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         month: z.string().describe('Month in YYYY-MM-01 format, or "current" for the current month.'),
         category_id: z.string().describe('The category to assign money to (from ynab_get_category).'),
@@ -87,7 +87,7 @@ export function registerMonthTools(server: McpServer): void {
           'The total amount to assign for the month, in dollars (e.g. 250 or 250.50). ' +
           'Replaces the current assigned amount.'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {

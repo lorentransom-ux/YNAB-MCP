@@ -140,7 +140,7 @@ export function registerCategoryTools(server: McpServer): void {
         'to read one category\'s budgeted amount, activity, or balance, use ynab_get_category instead. ' +
         'Accepts an optional month param (YYYY-MM-01 or "current") to return data for that month. ' +
         'Includes budgeted, activity, and balance amounts, plus goal information for each category.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe(
           'Budget/plan ID. Defaults to "last-used".'
         ),
@@ -148,7 +148,7 @@ export function registerCategoryTools(server: McpServer): void {
           'Month in YYYY-MM-01 format, or "current" for the current month. ' +
           'When provided, returns category data for that specific month.'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -191,7 +191,7 @@ export function registerCategoryTools(server: McpServer): void {
         'category_id for their figures. If the name matches several unrelated ' +
         'categories, or none, the call fails with the candidate names and IDs so you can retry — ' +
         'it never guesses.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().optional().describe(
           'Category name, loosely worded (e.g. "eating out", "coffee", "groceries 8th"). ' +
@@ -206,7 +206,7 @@ export function registerCategoryTools(server: McpServer): void {
         day: z.number().int().min(1).max(31).optional().describe(
           'Day of month used to choose between day-range splits. Defaults to today.'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -303,9 +303,9 @@ export function registerCategoryTools(server: McpServer): void {
         'Use this to get a category_group_id for ynab_create_category or ' +
         'ynab_update_category_group. Unlike ynab_get_categories, this also returns groups ' +
         'that are hidden or that contain no categories yet — including one you just created.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -329,7 +329,7 @@ export function registerCategoryTools(server: McpServer): void {
         'goal_frequency requires goal_target, cannot be combined with goal_target_date, and ' +
         'is not supported for Credit Card Payment categories. This does NOT assign budgeted ' +
         'amounts — use ynab_set_category_budget for that. Returns the created category.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().describe('The category name.'),
         category_group_id: z.string().describe(
@@ -340,7 +340,7 @@ export function registerCategoryTools(server: McpServer): void {
         goal_target_date: goalTargetDateCreateSchema,
         goal_needs_whole_amount: goalNeedsWholeCreateSchema,
         goal_frequency: goalFrequencySchema,
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (_api, planId) => {
@@ -376,7 +376,7 @@ export function registerCategoryTools(server: McpServer): void {
         'they are not the same as assigning money. goal_frequency requires goal_target, ' +
         'cannot be combined with goal_target_date, and is not supported for Credit Card ' +
         'Payment categories. Returns the updated category.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         category_id: z.string().describe('The category to update (from ynab_get_category).'),
         name: z.string().optional().describe('New category name.'),
@@ -386,7 +386,7 @@ export function registerCategoryTools(server: McpServer): void {
         goal_target_date: goalTargetDateUpdateSchema,
         goal_needs_whole_amount: goalNeedsWholeUpdateSchema,
         goal_frequency: goalFrequencySchema,
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (_api, planId) => {
@@ -418,10 +418,10 @@ export function registerCategoryTools(server: McpServer): void {
       description:
         'Create a new category group. The name must be at most 50 characters. ' +
         'Returns the created category group (id, name, hidden).',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().max(50).describe('The category group name (max 50 characters).'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -438,11 +438,11 @@ export function registerCategoryTools(server: McpServer): void {
       description:
         'Rename a category group. The name must be at most 50 characters. ' +
         'Returns the updated category group (id, name, hidden).',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         category_group_id: z.string().describe('The category group to update (from ynab_get_category_groups).'),
         name: z.string().max(50).describe('The new category group name (max 50 characters).'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {

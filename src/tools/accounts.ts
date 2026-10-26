@@ -11,11 +11,11 @@ export function registerAccountTools(server: McpServer): void {
         'Get all accounts with current balances, types, and on-budget status. ' +
         'Each account includes transfer_payee_id: pass that as payee_id on ynab_create_transaction ' +
         '(and omit category_id) to record a real account-to-account transfer.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe(
           'Budget/plan ID. Defaults to "last-used" (the most recently used budget).'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -46,7 +46,7 @@ export function registerAccountTools(server: McpServer): void {
         'Create a new unlinked (manually tracked) account with a starting balance. ' +
         'The YNAB API cannot create bank-linked accounts — those must be set up in the YNAB app. ' +
         'Returns the created account, including transfer_payee_id for later transfers.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().describe('The account name.'),
         type: z
@@ -55,7 +55,7 @@ export function registerAccountTools(server: McpServer): void {
         balance: z.number().describe(
           'Starting balance in dollars. Negative for debt (e.g. a credit card balance owed).'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
