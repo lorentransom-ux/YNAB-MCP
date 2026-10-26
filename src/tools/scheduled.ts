@@ -68,9 +68,9 @@ export function registerScheduledTools(server: McpServer): void {
         'Get all upcoming and recurring scheduled transactions. ' +
         'Returns frequency, next occurrence date, amount, payee name, and category name. ' +
         'Split scheduled transactions include a subtransactions array.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -94,7 +94,7 @@ export function registerScheduledTools(server: McpServer): void {
         'several categories) — pass a single category_id here, then split the occurrence in the ' +
         'YNAB app, or use ynab_create_transaction for a one-off split. ' +
         'Returns the created scheduled transaction.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account the scheduled transaction belongs to.'),
         date: z.string().describe('First occurrence date (YYYY-MM-DD). Must be in the future.'),
@@ -109,7 +109,7 @@ export function registerScheduledTools(server: McpServer): void {
         ),
         memo: z.string().optional().describe('Optional memo.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -139,7 +139,7 @@ export function registerScheduledTools(server: McpServer): void {
         'Requires scheduled_transaction_id (from ynab_get_scheduled_transactions). ' +
         'The YNAB API cannot add or change splits on an existing scheduled transaction. ' +
         'Returns the updated scheduled transaction.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         scheduled_transaction_id: z.string().describe('The scheduled transaction to update.'),
         account_id: z.string().optional().describe('Move it to a different account.'),
@@ -151,7 +151,7 @@ export function registerScheduledTools(server: McpServer): void {
         category_id: z.string().optional().describe('New category ID (from ynab_get_category).'),
         memo: z.string().optional().describe('New memo.'),
         flag_color: flagColorSchema.optional().describe('New flag color.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -191,10 +191,10 @@ export function registerScheduledTools(server: McpServer): void {
         'Delete a scheduled transaction. ' +
         'Requires scheduled_transaction_id (from ynab_get_scheduled_transactions). ' +
         'Returns the deleted scheduled transaction for confirmation.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         scheduled_transaction_id: z.string().describe('The scheduled transaction to delete.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {

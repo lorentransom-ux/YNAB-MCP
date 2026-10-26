@@ -25,13 +25,13 @@ export function registerMovementTools(server: McpServer): void {
         'Includes flag_color and flag_name. ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         since_date: z.string().optional().describe(
           'Return only transfers on or after this date (YYYY-MM-DD). ' +
           `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -77,7 +77,7 @@ export function registerMovementTools(server: McpServer): void {
         'action_count (distinct actions: each group counts once). Set grouped=true to nest movements under the single action that ' +
         'made them (e.g. one assignment that funded several categories). For transfers between ' +
         'ACCOUNTS, use ynab_get_money_transfers instead.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         category: z.string().optional().describe(
           'Return only movements into or out of this category. Loose name (emoji and ' +
@@ -96,7 +96,7 @@ export function registerMovementTools(server: McpServer): void {
         grouped: z.boolean().optional().describe(
           'When true, nest movements under their money movement group. Defaults to false.'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {

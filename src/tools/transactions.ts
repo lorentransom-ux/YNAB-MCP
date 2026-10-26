@@ -38,7 +38,7 @@ function jsonArray<T extends z.ZodTypeAny>(array: T) {
   }, array);
 }
 
-const splitLineSchema = z.object({
+const splitLineSchema = z.strictObject({
   amount: z.number().describe(AMOUNT_DESC),
   category_id: z.string().describe(
     'Category ID for this split line (from ynab_get_category).'
@@ -259,7 +259,7 @@ export function registerTransactionTools(server: McpServer): void {
         'Pass month to get one budget month. ' +
         `When neither month nor since_date is given, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         month: z.string().optional().describe(
           'Return only this budget month: YYYY-MM-01 format, or "current". ' +
@@ -275,7 +275,7 @@ export function registerTransactionTools(server: McpServer): void {
         until_date: z.string().optional().describe(
           'Return only transactions on or before this date (YYYY-MM-DD).'
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -323,10 +323,10 @@ export function registerTransactionTools(server: McpServer): void {
         'Get ONE transaction by ID, with its account, payee, and category IDs. Use it to follow ' +
         'an ID another tool returned: the other side of a transfer (transfer_transaction_id), the ' +
         'parent of a split line, or a transaction you just created or updated.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction ID.'),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -357,14 +357,14 @@ export function registerTransactionTools(server: McpServer): void {
         'and subtransactions on splits. ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account ID to filter transactions by.'),
         since_date: z.string().optional().describe(
           'Return only transactions on or after this date (YYYY-MM-DD). ' +
           `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -389,14 +389,14 @@ export function registerTransactionTools(server: McpServer): void {
         'Split transactions that include this category are returned with their subtransactions. ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         category_id: z.string().describe('The category ID to filter transactions by.'),
         since_date: z.string().optional().describe(
           'Return only transactions on or after this date (YYYY-MM-DD). ' +
           `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -421,14 +421,14 @@ export function registerTransactionTools(server: McpServer): void {
         'and subtransactions on splits. ' +
         `When since_date is omitted, only the last ${DEFAULT_SINCE_DAYS} days are returned; ` +
         'pass an explicit since_date to reach further back.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         payee_id: z.string().describe('The payee ID to filter transactions by.'),
         since_date: z.string().optional().describe(
           'Return only transactions on or after this date (YYYY-MM-DD). ' +
           `Defaults to ${DEFAULT_SINCE_DAYS} days ago when omitted.`
         ),
-      },
+      }),
     },
     async (args) =>
       ynabRead(args, async (api, planId) => {
@@ -460,7 +460,7 @@ export function registerTransactionTools(server: McpServer): void {
         'exists, use ynab_update_transaction with subtransactions instead of creating a new ' +
         'one. New transactions are approved unless approved is false. Returns the created transaction including flag_color, flag_name, and ' +
         'subtransactions when split.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         account_id: z.string().describe('The account the transaction belongs to. For a transfer, this is the source account.'),
         date: z.string().describe('Transaction date (YYYY-MM-DD). Cannot be in the future.'),
@@ -481,7 +481,7 @@ export function registerTransactionTools(server: McpServer): void {
         cleared: clearedSchema.optional().describe('Cleared status. Defaults to "uncleared".'),
         approved: z.boolean().optional().describe('Whether the transaction is approved. Defaults to true: the server approves a new transaction unless you pass false.'),
         flag_color: flagColorSchema.optional().describe('Optional flag color.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -572,7 +572,7 @@ export function registerTransactionTools(server: McpServer): void {
         'lines changed through the YNAB API; edit that in the YNAB app. If YNAB does not ' +
         'apply the split, the call fails and says so. Returns the updated transaction ' +
         'including flag_color, flag_name, and subtransactions when split.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction to update.'),
         account_id: z.string().optional().describe('Move the transaction to a different account.'),
@@ -589,7 +589,7 @@ export function registerTransactionTools(server: McpServer): void {
         cleared: clearedSchema.optional().describe('New cleared status.'),
         approved: z.boolean().optional().describe('Set true to approve an unapproved transaction.'),
         flag_color: flagColorSchema.optional().describe('New flag color.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -685,12 +685,12 @@ export function registerTransactionTools(server: McpServer): void {
         'one transaction use ynab_update_transaction with subtransactions. ' +
         'Fails with the list of IDs if YNAB does not confirm every transaction. ' +
         'Returns the updated transactions.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transactions: jsonArray(
           z
             .array(
-              z.object({
+              z.strictObject({
                 transaction_id: z.string().describe('The transaction to update.'),
                 account_id: z.string().optional().describe('Move the transaction to a different account.'),
                 date: z.string().optional().describe('New date (YYYY-MM-DD).'),
@@ -708,7 +708,7 @@ export function registerTransactionTools(server: McpServer): void {
             .max(MAX_BULK_UPDATES)
         )
           .describe('The transactions to update.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -774,10 +774,10 @@ export function registerTransactionTools(server: McpServer): void {
         'deletes a one-cent transaction there to make YNAB recalculate (listed in ' +
         'recalculated_categories). No manual flush is needed. If a category still does not ' +
         'match, the call fails and names it; the split is deleted either way.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         transaction_id: z.string().describe('The transaction to delete.'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
@@ -805,9 +805,9 @@ export function registerTransactionTools(server: McpServer): void {
         'Trigger an import of transactions from all linked (bank-connected) accounts. ' +
         'Equivalent to pressing "Import" in the YNAB app. ' +
         'Returns the IDs of newly imported transactions.',
-      inputSchema: {
+      inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
-      },
+      }),
     },
     async (args) =>
       ynabWrite(args, async (api, planId) => {
