@@ -70,7 +70,7 @@ export async function sendTelegram(chatId: number | string, text: string): Promi
     }
     console.log(`[Telegram] Sent to ${chatId}`);
   } catch (err) {
-    console.error(`[Telegram] Failed to send to ${chatId}:`, err instanceof Error ? err.message : err);
+    console.error('[Telegram] Failed to send to %s:', chatId, err instanceof Error ? err.message : err);
     throw err;
   }
 }
