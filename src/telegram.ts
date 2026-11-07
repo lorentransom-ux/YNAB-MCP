@@ -43,12 +43,32 @@ function markTokenRejected(method: string, status: number): void {
   telegramLastError = `${method} rejected the bot token (HTTP ${status})`;
 }
 
+// Waits before each retry of a transient send failure (network drop, Telegram 5xx/429).
+// A dropped connection (ECONNRESET) once cost a user their scheduled digest.
+const RETRY_DELAYS_MS = [1000, 3000];
+
+function isTransientStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
 async function postMessage(chatId: number | string, text: string, markdown: boolean): Promise<Response> {
-  return fetch(apiUrl('sendMessage'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(markdown ? { chat_id: chatId, text, parse_mode: 'Markdown' } : { chat_id: chatId, text }),
-  });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(apiUrl('sendMessage'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(markdown ? { chat_id: chatId, text, parse_mode: 'Markdown' } : { chat_id: chatId, text }),
+      });
+      if (!isTransientStatus(res.status) || attempt >= RETRY_DELAYS_MS.length) return res;
+      console.warn(`[Telegram] HTTP ${res.status} sending to ${chatId}; retrying (attempt ${attempt + 2})`);
+    } catch (err) {
+      // fetch throws only for network-level failures; those are worth retrying.
+      if (attempt >= RETRY_DELAYS_MS.length) throw err;
+      const reason = err instanceof Error ? ((err.cause as { code?: string } | undefined)?.code ?? err.message) : String(err);
+      console.warn(`[Telegram] Network error sending to ${chatId} (${reason}); retrying (attempt ${attempt + 2})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+  }
 }
 
 export async function sendTelegram(chatId: number | string, text: string): Promise<void> {
