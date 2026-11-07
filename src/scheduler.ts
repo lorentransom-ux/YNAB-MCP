@@ -56,6 +56,7 @@ async function buildMessage(user: UserConfig): Promise<string> {
 
 async function runForUser(name: string, chatId: number): Promise<void> {
   console.log(`[Scheduler] Firing for ${name}`);
+  let message: string | undefined;
   try {
     const config = loadConfig();
     const user = config.users.find((u) => u.name === name);
@@ -63,17 +64,18 @@ async function runForUser(name: string, chatId: number): Promise<void> {
       console.warn(`[Scheduler] User "${name}" not found in config — skipping`);
       return;
     }
-    const message = await buildMessage(user);
+    message = await buildMessage(user);
     await sendTelegram(chatId, message);
   } catch (err) {
     console.error(`[Scheduler] Error for ${name}:`, err);
-    // A missing digest looks like a quiet day, so say it failed.
-    const msg = handleYnabError(err);
+    // A missing digest looks like a quiet day, so say it failed — and say which
+    // step failed, so a delivery hiccup isn't mistaken for a YNAB problem.
+    const notice =
+      message === undefined
+        ? `⚠️ Your YNAB digest couldn't be built. ${handleYnabError(err).slice(0, 200)}`
+        : `⚠️ Your YNAB digest was built but couldn't be delivered (Telegram connection error).`;
     try {
-      await sendTelegram(
-        chatId,
-        `⚠️ Your YNAB digest couldn't be built. ${msg.slice(0, 200)} It will try again at the next scheduled time.`
-      );
+      await sendTelegram(chatId, `${notice} It will try again at the next scheduled time.`);
     } catch {
       // sendTelegram already logged; if Telegram itself is failing there's no other channel.
     }
