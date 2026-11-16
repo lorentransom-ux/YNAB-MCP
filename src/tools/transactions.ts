@@ -802,9 +802,9 @@ export function registerTransactionTools(server: McpServer): void {
     'ynab_import_transactions',
     {
       description:
-        'Trigger an import of transactions from all linked (bank-connected) accounts. ' +
-        'Equivalent to pressing "Import" in the YNAB app. ' +
-        'Returns the IDs of newly imported transactions.',
+        'DEPRECATED by YNAB: linked (bank-connected) accounts now import automatically, and this ' +
+        'endpoint always returns an empty list. Calling it does not fetch new transactions; to see ' +
+        'recent imports, use ynab_get_transactions (e.g. with type "unapproved") instead.',
       inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
       }),
@@ -813,7 +813,15 @@ export function registerTransactionTools(server: McpServer): void {
       ynabWrite(args, async (api, planId) => {
         const response = await api.transactions.importTransactions(planId);
         const ids = response.data.transaction_ids;
-        return { imported_count: ids.length, transaction_ids: ids };
+        return {
+          imported_count: ids.length,
+          transaction_ids: ids,
+          ...(ids.length === 0 && {
+            note:
+              'YNAB has deprecated this endpoint and it always returns an empty list. Linked ' +
+              'accounts import automatically; check ynab_get_transactions for recent imports.',
+          }),
+        };
       })
   );
 }

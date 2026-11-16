@@ -175,7 +175,7 @@ export function registerMovementTools(server: McpServer): void {
         // so an evening move is not counted on the next day.
         const timeZone = loadConfig().users[0]?.timezone ?? 'UTC';
         if (byDate) {
-          const localDate = (iso: string | undefined): string | undefined => {
+          const localDate = (iso: string | null | undefined): string | undefined => {
             if (!iso) return undefined;
             const d = new Date(iso);
             return Number.isNaN(d.getTime()) ? undefined : d.toLocaleDateString('en-CA', { timeZone });

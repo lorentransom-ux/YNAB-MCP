@@ -255,25 +255,50 @@ export function resolveMonth(month: string): string {
   return month;
 }
 
-function cadencePeriod(cadence: number | undefined, frequency: number | undefined): string {
-  const freq = frequency ?? 1;
+interface GoalPeriod {
+  // Human-readable repeat interval, e.g. "month", "3 months", "year".
+  label: string;
+  // Length of the interval in months (weeks are 12/52 of a month), used to
+  // spread the target into a monthly average.
+  months: number;
+}
+
+function cadencePeriod(
+  cadence: number | null | undefined,
+  frequency: number | null | undefined
+): GoalPeriod {
+  const freq = frequency != null && frequency > 0 ? frequency : 1;
   // Cadences 0, 1, 2, 13: period = cadence-type * frequency.
   // Cadence 0 is "None" — treated as monthly, same as cadence 1.
-  if (cadence === 0 || cadence === 1) return freq === 1 ? 'month' : `${freq} months`;
-  if (cadence === 2) return freq === 1 ? 'week' : `${freq} weeks`;
-  if (cadence === 13) return freq === 1 ? 'year' : `${freq} years`;
-  // Cadences 3-12: fixed monthly multiples (cadence N = every (N-1) months)
-  if (cadence !== undefined && cadence >= 3 && cadence <= 12) {
-    const months = cadence - 1;
-    return `${months} months`;
+  if (cadence == null || cadence === 0 || cadence === 1) {
+    return { label: freq === 1 ? 'month' : `${freq} months`, months: freq };
   }
-  // Cadence 14: every 2 years
-  if (cadence === 14) return '2 years';
-  return 'month';
+  if (cadence === 2) {
+    return { label: freq === 1 ? 'week' : `${freq} weeks`, months: (freq * 12) / 52 };
+  }
+  if (cadence === 13) {
+    return { label: freq === 1 ? 'year' : `${freq} years`, months: freq * 12 };
+  }
+  // Cadences 3-12: fixed monthly multiples (cadence N = every (N-1) months); frequency ignored.
+  if (cadence >= 3 && cadence <= 12) {
+    const months = cadence - 1;
+    return { label: `${months} months`, months };
+  }
+  // Cadence 14: every 2 years; frequency ignored.
+  if (cadence === 14) return { label: '2 years', months: 24 };
+  return { label: 'month', months: 1 };
 }
 
 export interface GoalFields {
   goal_summary: string;
+  // How often a recurring target repeats ("month", "year", "3 months", ...).
+  // null for goals that don't repeat (target balance, target balance by date).
+  goal_period: string | null;
+  // goal_target spread evenly across goal_period, as a per-month figure.
+  // For a monthly goal this equals the target. null for non-repeating goals.
+  goal_monthly_average: string | null;
+  // Next due date of a recurring target (YYYY-MM-DD), when YNAB returns one.
+  goal_next_due: string | null;
   goal_percentage_complete: number | null;
   goal_under_funded: string | null;
   goal_overall_funded: string | null;
@@ -292,6 +317,7 @@ export function buildGoalFields(cat: Category): GoalFields {
   const gt = cat.goal_type;
   const target = toUSD(cat.goal_target);
   let goal_summary: string;
+  let period: GoalPeriod | null = null;
 
   if (gt == null) {
     goal_summary = 'No goal';
@@ -300,16 +326,17 @@ export function buildGoalFields(cat: Category): GoalFields {
   } else if (gt === 'TBD') {
     goal_summary = `Target balance of ${target} by ${cat.goal_target_date ?? 'unknown date'}`;
   } else if (gt === 'MF') {
-    const period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
-    goal_summary = `Fund ${target} every ${period}`;
+    period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
+    goal_summary = `Fund ${target} every ${period.label}`;
   } else if (gt === 'NEED') {
+    period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
     const style = cat.goal_needs_whole_amount ? 'Set Aside' : 'Refill';
-    goal_summary = `Spend ${target} per period (${style})`;
+    goal_summary = `Spend ${target} every ${period.label} (${style})`;
   } else if (gt === 'DEBT') {
     // Loan-paired categories (mortgage, auto loan). The target is the payment.
     if (cat.goal_target != null && cat.goal_target > 0) {
-      const period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
-      goal_summary = `Debt payment of ${target} every ${period}`;
+      period = cadencePeriod(cat.goal_cadence, cat.goal_cadence_frequency);
+      goal_summary = `Debt payment of ${target} every ${period.label}`;
     } else {
       goal_summary = 'Debt payment goal (YNAB returned no target amount)';
     }
@@ -317,8 +344,21 @@ export function buildGoalFields(cat: Category): GoalFields {
     goal_summary = `Unknown goal type: ${gt}`;
   }
 
+  // Spell out the per-month figure whenever the period isn't a single month, so a
+  // reader can't mistake a yearly $1,200 target for $1,200 a month.
+  const monthlyAverage =
+    period && cat.goal_target != null ? Math.round(cat.goal_target / period.months) : null;
+  if (period && monthlyAverage != null && period.label !== 'month') {
+    goal_summary += `, about ${toUSD(monthlyAverage)}/month on average`;
+  }
+  const nextDue = period ? (cat.goal_target_date ?? null) : null;
+  if (nextDue) goal_summary += `; next due ${nextDue}`;
+
   return {
     goal_summary,
+    goal_period: period?.label ?? null,
+    goal_monthly_average: monthlyAverage != null ? toUSD(monthlyAverage) : null,
+    goal_next_due: nextDue,
     goal_percentage_complete: cat.goal_percentage_complete ?? null,
     goal_under_funded: cat.goal_under_funded != null ? toUSD(cat.goal_under_funded) : null,
     goal_overall_funded: cat.goal_overall_funded != null ? toUSD(cat.goal_overall_funded) : null,
