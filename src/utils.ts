@@ -255,12 +255,14 @@ export function resolveMonth(month: string): string {
   return month;
 }
 
-interface GoalPeriod {
+export interface GoalPeriod {
   // Human-readable repeat interval, e.g. "month", "3 months", "year".
   label: string;
   // Length of the interval in months (weeks are 12/52 of a month), used to
   // spread the target into a monthly average.
   months: number;
+  // Exact step between due dates: whole days for weekly goals, whole months otherwise.
+  stepDays?: number;
 }
 
 function cadencePeriod(
@@ -274,7 +276,11 @@ function cadencePeriod(
     return { label: freq === 1 ? 'month' : `${freq} months`, months: freq };
   }
   if (cadence === 2) {
-    return { label: freq === 1 ? 'week' : `${freq} weeks`, months: (freq * 12) / 52 };
+    return {
+      label: freq === 1 ? 'week' : `${freq} weeks`,
+      months: (freq * 12) / 52,
+      stepDays: freq * 7,
+    };
   }
   if (cadence === 13) {
     return { label: freq === 1 ? 'year' : `${freq} years`, months: freq * 12 };
@@ -287,6 +293,44 @@ function cadencePeriod(
   // Cadence 14: every 2 years; frequency ignored.
   if (cadence === 14) return { label: '2 years', months: 24 };
   return { label: 'month', months: 1 };
+}
+
+function addMonthsClamped(year: number, monthIndex: number, day: number, add: number): string {
+  const total = monthIndex + add;
+  const y = year + Math.floor(total / 12);
+  const m = ((total % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(day, lastDay))).toISOString().slice(0, 10);
+}
+
+// YNAB's goal_target_date on a repeating goal is the date the cycle started
+// (it can be years old), not the upcoming due date. Step forward from it by the
+// goal period to the first due date on or after today. Dates are YYYY-MM-DD.
+export function nextGoalDueDate(anchor: string, period: GoalPeriod, today: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(anchor);
+  if (!m) return null;
+  const start = `${m[1]}-${m[2]}-${m[3]}`;
+  if (start >= today) return start;
+
+  if (period.stepDays) {
+    const startMs = Date.parse(`${start}T00:00:00Z`);
+    const todayMs = Date.parse(`${today}T00:00:00Z`);
+    const stepMs = period.stepDays * 86_400_000;
+    const steps = Math.ceil((todayMs - startMs) / stepMs);
+    return new Date(startMs + steps * stepMs).toISOString().slice(0, 10);
+  }
+
+  const step = Math.max(1, Math.round(period.months));
+  const [y, mon, d] = [Number(m[1]), Number(m[2]) - 1, Number(m[3])];
+  const [ty, tm] = [Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1];
+  // Jump close to today, then step to the first date that isn't in the past.
+  let k = Math.max(0, Math.floor(((ty - y) * 12 + (tm - mon)) / step) - 1);
+  let due = addMonthsClamped(y, mon, d, k * step);
+  while (due < today) {
+    k += 1;
+    due = addMonthsClamped(y, mon, d, k * step);
+  }
+  return due;
 }
 
 export interface GoalFields {
@@ -313,7 +357,11 @@ export function compact<T extends Record<string, unknown>>(obj: T): Partial<T> {
   ) as Partial<T>;
 }
 
-export function buildGoalFields(cat: Category): GoalFields {
+// today is YYYY-MM-DD in the user's timezone; it defaults to the UTC date.
+export function buildGoalFields(
+  cat: Category,
+  today: string = new Date().toISOString().slice(0, 10)
+): GoalFields {
   const gt = cat.goal_type;
   const target = toUSD(cat.goal_target);
   let goal_summary: string;
@@ -351,7 +399,8 @@ export function buildGoalFields(cat: Category): GoalFields {
   if (period && monthlyAverage != null && period.label !== 'month') {
     goal_summary += `, about ${toUSD(monthlyAverage)}/month on average`;
   }
-  const nextDue = period ? (cat.goal_target_date ?? null) : null;
+  const nextDue =
+    period && cat.goal_target_date ? nextGoalDueDate(cat.goal_target_date, period, today) : null;
   if (nextDue) goal_summary += `; next due ${nextDue}`;
 
   return {
