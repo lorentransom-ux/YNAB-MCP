@@ -9,6 +9,7 @@ import {
   resolveMonth,
   resolveCategoryQuery,
   dayOfMonthInTz,
+  daysAgoInTz,
 } from '../utils.js';
 import { loadConfig } from '../config.js';
 
@@ -110,7 +111,7 @@ export function mapCategory(cat: Category, groupName?: string) {
     activity: toUSD(cat.activity),
     balance: toUSD(cat.balance),
     note: cat.note ?? null,
-    ...buildGoalFields(cat),
+    ...buildGoalFields(cat, daysAgoInTz(0, loadConfig().users[0]?.timezone ?? 'UTC')),
   };
 }
 
