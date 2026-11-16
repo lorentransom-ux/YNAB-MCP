@@ -27,21 +27,30 @@ type CategoryWritePayload = {
   goal_frequency?: GoalFrequency;
 };
 
+// Appended to the read tools so callers read goal amounts against their period.
+const GOAL_FIELDS_NOTE =
+  ' The target amount in goal_summary is per goal_period (e.g. "year"), ' +
+  'NOT per month. goal_monthly_average spreads the target evenly over that period; ' +
+  'goal_under_funded is what YNAB says is still needed this month.';
+
 const goalFrequencySchema = z
   .enum(GOAL_FREQUENCY)
   .optional()
   .describe(
     'When specified, configures a recurring NEED target of goal_target that repeats at this ' +
       'frequency (monthly, weekly, or yearly), replacing any existing target. Requires goal_target. ' +
-      'Cannot be combined with goal_target_date. Not supported for Credit Card Payment categories.'
+      'Cannot be combined with goal_target_date. Not supported for Credit Card Payment categories. ' +
+      'goal_target is the amount for ONE period: $1,200 yearly means $1,200 per year (about $100 a ' +
+      'month), not $1,200 a month.'
   );
 
 const goalTargetCreateSchema = z
   .number()
   .optional()
   .describe(
-    'Goal target amount in dollars (converted to milliunits). If specified and the category has no ' +
-      'goal yet, a monthly NEED goal is created (MF for Credit Card Payment categories).'
+    'Goal target amount in dollars for one goal period (converted to milliunits). If specified ' +
+      'and the category has no goal yet, a monthly NEED goal is created (MF for Credit Card ' +
+      'Payment categories). For a yearly goal pass the full yearly amount with goal_frequency "yearly".'
   );
 
 const goalTargetUpdateSchema = z
@@ -49,9 +58,10 @@ const goalTargetUpdateSchema = z
   .nullable()
   .optional()
   .describe(
-    'Goal target amount in dollars (converted to milliunits). If specified and the category has no ' +
-      'goal yet, a monthly NEED goal is created (MF for Credit Card Payment categories). ' +
-      'Pass null to remove an existing target.'
+    'Goal target amount in dollars for one goal period (converted to milliunits). If specified ' +
+      'and the category has no goal yet, a monthly NEED goal is created (MF for Credit Card ' +
+      'Payment categories). For a yearly goal pass the full yearly amount with goal_frequency ' +
+      '"yearly". Pass null to remove an existing target.'
   );
 
 const goalTargetDateCreateSchema = z
@@ -139,7 +149,8 @@ export function registerCategoryTools(server: McpServer): void {
         'Get all category groups and their categories. This is a large response (every category); ' +
         'to read one category\'s budgeted amount, activity, or balance, use ynab_get_category instead. ' +
         'Accepts an optional month param (YYYY-MM-01 or "current") to return data for that month. ' +
-        'Includes budgeted, activity, and balance amounts, plus goal information for each category.',
+        'Includes budgeted, activity, and balance amounts, plus goal information for each category.' +
+        GOAL_FIELDS_NOTE,
       inputSchema: z.strictObject({
         plan_id: z.string().optional().describe(
           'Budget/plan ID. Defaults to "last-used".'
@@ -190,7 +201,8 @@ export function registerCategoryTools(server: McpServer): void {
         'other splits are listed by name and ID in related_categories; call again with a ' +
         'category_id for their figures. If the name matches several unrelated ' +
         'categories, or none, the call fails with the candidate names and IDs so you can retry — ' +
-        'it never guesses.',
+        'it never guesses.' +
+        GOAL_FIELDS_NOTE,
       inputSchema: z.strictObject({
         plan_id: z.string().optional().describe('Budget/plan ID. Defaults to "last-used".'),
         name: z.string().optional().describe(
